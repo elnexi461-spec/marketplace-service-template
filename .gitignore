@@ -33,6 +33,10 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Playwright browser binaries (downloaded on demand)
+.cache/ms-playwright/
+ms-playwright/
+
 # Proof data (local testing, may contain IPs)
 proof_*.json
 *-proof-*.json

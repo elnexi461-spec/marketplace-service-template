@@ -29,8 +29,151 @@ import {
 } from './scrapers/linkedin-enrichment';
 import { getProfile, getPosts, analyzeProfile, analyzeImages, auditProfile } from './scrapers/instagram-scraper';
 import { searchReddit, getSubreddit, getTrending, getComments } from './scrapers/reddit-scraper';
+import { scrapePrice } from './scrapers/price-monitor';
 
 export const serviceRouter = new Hono();
+
+// ─── PRICE MONITOR (Bounty Wave 2 — E-Commerce Price & Stock) ───
+const SCRAPE_PRICE_USDC = parseFloat(process.env.SCRAPE_PRICE_USDC || '0.002');
+const SCRAPE_DESCRIPTION = 'E-Commerce Price & Stock Monitor — fetches product name, price, currency, and stock status from Amazon, eBay, and other product pages.';
+const SCRAPE_TIMEOUT_MS = parseInt(process.env.SCRAPE_TIMEOUT_MS || '5000');
+const SCRAPE_OUTPUT_SCHEMA = {
+  input: { url: 'string — full product page URL (Amazon, eBay, or generic product page)' },
+  output: {
+    product_name: 'string',
+    current_price: 'number | null',
+    currency: 'string (ISO 4217 code)',
+    in_stock: 'boolean',
+    timestamp: 'string (ISO 8601)',
+  },
+};
+
+function build402BaseOnly(resource: string, description: string, priceUSDC: number) {
+  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS || '';
+  // x402 "exact" scheme uses USDC base units (6 decimals) on Base.
+  const maxAmountRequired = String(Math.round(priceUSDC * 1_000_000));
+  return {
+    x402Version: 2,
+    error: 'X-PAYMENT header is required',
+    accepts: [
+      {
+        scheme: 'exact',
+        network: 'base',
+        chainId: 'eip155:8453',
+        maxAmountRequired,
+        resource,
+        description,
+        mimeType: 'application/json',
+        payTo: baseRecipient,
+        maxTimeoutSeconds: 60,
+        asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        extra: { name: 'USD Coin', version: '2' },
+      },
+    ],
+    price: { amount: String(priceUSDC), currency: 'USDC' },
+    headers: {
+      required: ['Payment-Signature'],
+      optional: ['X-Payment-Network'],
+      format: 'Payment-Signature: <base_tx_hash>',
+    },
+    outputSchema: SCRAPE_OUTPUT_SCHEMA,
+  };
+}
+
+serviceRouter.post('/scrape', async (c) => {
+  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS;
+  if (!baseRecipient) {
+    return c.json({ error: 'Service misconfigured: WALLET_ADDRESS_BASE (or WALLET_ADDRESS) not set' }, 500);
+  }
+
+  // Parse body up-front so we can echo the URL on 402.
+  let body: any = null;
+  try { body = await c.req.json(); } catch { /* tolerate empty body */ }
+  const url: string | undefined = body?.url;
+
+  // ─── x402 PAYMENT GATE ───
+  const payment = extractPayment(c);
+  if (!payment) {
+    const challenge = build402BaseOnly('/api/scrape', SCRAPE_DESCRIPTION, SCRAPE_PRICE_USDC);
+    c.header('X-Payment-Required', `network=base; amount=${SCRAPE_PRICE_USDC}; asset=USDC; payTo=${baseRecipient}`);
+    return c.json(challenge, 402);
+  }
+  if (payment.network !== 'base') {
+    return c.json({ error: 'This endpoint only accepts payments on Base', requiredNetwork: 'base' }, 402);
+  }
+
+  const verification = await verifyPayment(payment, baseRecipient, SCRAPE_PRICE_USDC);
+  if (!verification.valid) {
+    return c.json({
+      error: 'Payment verification failed',
+      reason: verification.error,
+      hint: 'Send 0.002 USDC on Base to the recipient address and pass the tx hash in the Payment-Signature header.',
+    }, 402);
+  }
+
+  // ─── INPUT VALIDATION ───
+  if (!url || typeof url !== 'string') {
+    return c.json({
+      error: 'Missing required field: url',
+      hint: 'POST a JSON body like { "url": "https://www.amazon.com/dp/..." }',
+    }, 400);
+  }
+  let parsed: URL;
+  try { parsed = new URL(url); } catch {
+    return c.json({ error: 'Invalid URL' }, 400);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return c.json({ error: 'URL must use http or https' }, 400);
+  }
+
+  // ─── SCRAPE ───
+  try {
+    const result = await scrapePrice(url, { timeoutMs: SCRAPE_TIMEOUT_MS });
+
+    c.header('X-Payment-Settled', 'true');
+    c.header('X-Payment-TxHash', payment.txHash);
+
+    if (!result.snapshot) {
+      return c.json({
+        error: 'Scrape failed',
+        reason: result.error,
+        source: result.source,
+        attempts: result.attempts,
+        http_status: result.http_status,
+        payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
+      }, 502);
+    }
+
+    return c.json({
+      ...result.snapshot,
+      meta: {
+        source: result.source,
+        attempts: result.attempts,
+        used_user_agent: result.used_user_agent,
+        http_status: result.http_status,
+      },
+      payment: {
+        txHash: payment.txHash,
+        network: payment.network,
+        amount: verification.amount,
+        settled: true,
+      },
+    });
+  } catch (err: any) {
+    return c.json({
+      error: 'Scrape failed',
+      message: err?.message || String(err),
+    }, 502);
+  }
+});
+
+// Convenience: GET /scrape returns the 402 challenge (useful for clients to discover pricing).
+serviceRouter.get('/scrape', (c) => {
+  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS || '';
+  if (!baseRecipient) return c.json({ error: 'Service misconfigured' }, 500);
+  c.header('X-Payment-Required', `network=base; amount=${SCRAPE_PRICE_USDC}; asset=USDC; payTo=${baseRecipient}`);
+  return c.json(build402BaseOnly('/api/scrape', SCRAPE_DESCRIPTION, SCRAPE_PRICE_USDC), 402);
+});
 
 // ─── TREND INTELLIGENCE ROUTES (Bounty #70) ─────────
 serviceRouter.route('/research', researchRouter);

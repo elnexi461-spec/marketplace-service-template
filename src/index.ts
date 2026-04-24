@@ -67,6 +67,7 @@ app.get('/health', (c) => c.json({
   version: '2.0.0',
   timestamp: new Date().toISOString(),
   endpoints: [
+    '/api/scrape',
     '/api/run',
     '/api/details',
     '/api/serp',
@@ -102,6 +103,7 @@ app.get('/', (c) => c.json({
   description: process.env.SERVICE_DESCRIPTION || 'AI agent intelligence services powered by real 4G/5G mobile proxies.',
   version: '2.0.0',
   endpoints: [
+    { method: 'POST', path: '/api/scrape', description: 'E-Commerce Price & Stock Monitor — Amazon/eBay/generic product pages', price: '0.002 USDC (Base)' },
     { method: 'GET', path: '/api/run', description: 'Google Maps Lead Generator — search businesses by category + location', price: '0.005 USDC' },
     { method: 'GET', path: '/api/details', description: 'Google Maps Place Details — detailed business info by Place ID', price: '0.005 USDC' },
     { method: 'GET', path: '/api/serp', description: 'Mobile SERP Tracker — Google search results with organic, ads, PAA, AI overview', price: '0.003 USDC' },

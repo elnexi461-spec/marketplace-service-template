@@ -26,14 +26,14 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PORT=5000 bun run src/index.ts"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=5000 LD_LIBRARY_PATH=\"$REPLIT_LD_LIBRARY_PATH\" WALLET_ADDRESS=6eUdVwsPArTxwVqEARYGCh4S2qwW2zCs7jSEDRpxydnv WALLET_ADDRESS_BASE=0xF8cD900794245fc36CBE65be9afc23CDF5103042 bun run src/index.ts"
+waitForPort = 5000
+
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bun", "run", "src/index.ts"]
+run = ["sh", "-c", "LD_LIBRARY_PATH=\"$REPLIT_LD_LIBRARY_PATH\" bun run src/index.ts"]

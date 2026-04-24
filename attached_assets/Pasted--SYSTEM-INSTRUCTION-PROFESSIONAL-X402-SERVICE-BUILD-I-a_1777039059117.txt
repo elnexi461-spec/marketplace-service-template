@@ -1,0 +1,73 @@
+[SYSTEM INSTRUCTION: PROFESSIONAL X402 SERVICE BUILD]
+
+"I am a Software Engineer building a production-grade service for the Proxies.sx Marketplace. I have forked the marketplace-service-template and I need you to implement the E-Commerce Price & Stock Monitor (Bounty Wave 2).
+
+CORE REQUIREMENTS:
+
+
+
+Architecture: Use the existing template structure (Hono for Node.js or FastAPI for Python). Implement the x402 Protocol V2 middleware to gate the /scrape endpoint.
+
+Payment Logic: Set the price to 0.002 USDC (equivalent to 2000 units in x402 'exact' scheme) on the Base Network. Ensure the PAYMENT-REQUIRED header is correctly structured according to the 2026 x402 spec.
+
+Scraper Engine: - Use Playwright with the playwright-stealth plugin to bypass anti-bot measures on Amazon and eBay.
+
+Implement 'Headless Mobile' emulation (User-Agent: iPhone/Android) to reduce the chance of CAPTCHAs.
+
+Disable CSS and Images to maximize speed and minimize Railway resource usage.
+
+Data Schema: The API must accept a url in the POST body and return a clean JSON object:
+
+
+
+JSON
+
+
+
+{
+
+  "product_name": "string",
+
+  "current_price": "float",
+
+  "currency": "string (ISO code)",
+
+  "in_stock": "boolean",
+
+  "timestamp": "ISO8601"
+
+}
+
+Robustness & Stealth:
+
+Implement a 5-second timeout for page loads.
+
+Add a 'Self-Heal' logic: if a standard scrape fails, retry once with a different mobile User-Agent.
+
+Handle 404s and 'Out of Stock' messages gracefully without crashing the service.
+
+Deployment Ready: Configure the nixpacks.toml or Dockerfile for Railway deployment. Ensure all environment variables for the x402 facilitator and wallet address are mapped in a .env.example file.
+
+EXECUTION PLAN:
+
+
+
+Task 1: Initialize the x402 middleware and define the payment headers.
+
+Task 2: Build the Playwright scraper module with site-specific selectors for Amazon and eBay.
+
+Task 3: Connect the scraper logic to the gated route.
+
+Task 4: Generate a test script test_x402.sh that simulates a 402 challenge/response flow so I can verify the logic before I push to GitHub.
+
+Final Goal: I need a service that is 'un-rejectable' by the Proxies.sx maintainers. Focus on high uptime, low latency, and perfect x402 compliance.AUTONOMOUS QUALITY & DEBUGGING (CRITICAL):
+
+
+
+Console Monitoring: You must monitor the Replit console during the 'Run' phase. If you detect any ModuleNotFoundError, SyntaxError, or TimeoutError, you are authorized to immediately stop, fix the code, and restart without waiting for my input.
+
+Deployment Validation: Before finishing, run a test deployment check. If the Nixpacks build fails or Railway deployment variables are missing, analyze the build logs and apply the fix.
+
+Self-Healing Scraper: If Playwright hits a CAPTCHA during testing, automatically update the stealth headers and retry until you achieve a 100% success rate on Amazon/eBay.
+
+Validation Script: Create test_x402.sh to verify the payment-gate logic locally.
