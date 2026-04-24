@@ -121,7 +121,7 @@ app.get('/', (c) => {
     { method: 'POST', path: '/api/scrape', description: 'E-Commerce Price & Stock Monitor — Amazon/eBay/generic product pages', price: '0.002 USDC (Base)' },
     { method: 'GET', path: '/api/run', description: 'Google Maps Lead Generator — search businesses by category + location', price: '0.005 USDC' },
     { method: 'GET', path: '/api/details', description: 'Google Maps Place Details — detailed business info by Place ID', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/serp', description: 'Mobile SERP Tracker — Google search results with organic, ads, PAA, AI overview', price: '0.003 USDC' },
+    { method: 'GET', path: '/api/serp', description: 'Mobile SERP Scraper — Google organic results (title, link, snippet) via Playwright + iPhone 14 stealth', price: '0.003 USDC (Base)' },
     { method: 'GET', path: '/api/jobs', description: 'Get job listings (Indeed/LinkedIn) with salary + date + proxy metadata' },
     { method: 'GET', path: '/api/reviews/search', description: 'Search businesses by query + location', price: '0.01 USDC' },
     { method: 'GET', path: '/api/reviews/:place_id', description: 'Fetch Google reviews by Place ID', price: '0.02 USDC' },

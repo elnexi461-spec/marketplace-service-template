@@ -48,7 +48,12 @@ const SCRAPE_OUTPUT_SCHEMA = {
   },
 };
 
-function build402BaseOnly(resource: string, description: string, priceUSDC: number) {
+function build402BaseOnly(
+  resource: string,
+  description: string,
+  priceUSDC: number,
+  outputSchema: Record<string, any> = SCRAPE_OUTPUT_SCHEMA,
+) {
   const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS || '';
   // x402 "exact" scheme uses USDC base units (6 decimals) on Base.
   const maxAmountRequired = String(Math.round(priceUSDC * 1_000_000));
@@ -76,7 +81,7 @@ function build402BaseOnly(resource: string, description: string, priceUSDC: numb
       optional: ['X-Payment-Network'],
       format: 'Payment-Signature: <base_tx_hash>',
     },
-    outputSchema: SCRAPE_OUTPUT_SCHEMA,
+    outputSchema,
   };
 }
 
@@ -1590,50 +1595,94 @@ serviceRouter.get('/airbnb/market-stats', async (c) => {
   }
 });
 
-// ─── MOBILE SERP TRACKER ────────────────────────────────
+// ─── MOBILE SERP (Playwright + iPhone 14, x402-gated on Base) ───
 
-import { scrapeMobileSERP } from './scrapers/serp-tracker';
+import { scrapeSerpMobile } from './scrapers/serp-playwright';
 
 const SERP_PRICE_USDC = parseFloat(process.env.SERP_PRICE_USDC || '0.003');
-const SERP_DESCRIPTION = 'Mobile SERP Tracker — Google search results with organic, ads, PAA, AI overview, map pack, knowledge panel. Real mobile IP fingerprint.';
+const SERP_TIMEOUT_MS = parseInt(process.env.SERP_TIMEOUT_MS || '10000');
+const SERP_DESCRIPTION = 'Mobile SERP Scraper — Google organic search results (title, link, snippet) extracted via stealth headless Chromium emulating an iPhone 14.';
 const SERP_OUTPUT_SCHEMA = {
-  input: { query: 'string (required) — search query', location: 'string (optional) — geo location', num: 'number (optional) — results count, default 10' },
-  output: { organic: '[{ position, title, url, snippet, sitelinks? }]', ads: '[{ position, title, url, description }]', peopleAlsoAsk: '[{ question, snippet }]', aiOverview: '{ text, sources }', mapPack: '[{ name, rating, reviews, address }]', knowledgePanel: '{ title, description, attributes }' },
+  input: {
+    q: 'string (required) — search query (alias: query)',
+    max: 'number (optional) — max organic results, default 10',
+    hl: 'string (optional) — UI language, default "en"',
+    gl: 'string (optional) — country, default "us"',
+  },
+  output: {
+    query: 'string',
+    count: 'number',
+    results: '[{ position: number, title: string, url: string, snippet: string }]',
+    device: 'string (e.g. "iPhone 14")',
+  },
 };
 
-serviceRouter.get('/serp', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
-  if (!walletAddress) return c.json({ error: 'Wallet not configured' }, 500);
-
-  const payment = extractPayment(c);
-  if (!payment) {
-    return c.json(build402Response('/api/serp', SERP_DESCRIPTION, SERP_PRICE_USDC, walletAddress, SERP_OUTPUT_SCHEMA), 402);
+async function handleSerp(c: any) {
+  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS;
+  if (!baseRecipient) {
+    return c.json({ error: 'Service misconfigured: WALLET_ADDRESS_BASE (or WALLET_ADDRESS) not set' }, 500);
   }
 
-  const verification = await verifyPayment(payment, walletAddress, SERP_PRICE_USDC);
-  if (!verification.valid) return c.json({ error: 'Payment verification failed', reason: verification.error }, 402);
+  // ─── x402 PAYMENT GATE (V2 envelope, Base only) ───
+  const payment = extractPayment(c);
+  if (!payment) {
+    const challenge = build402BaseOnly('/api/serp', SERP_DESCRIPTION, SERP_PRICE_USDC, SERP_OUTPUT_SCHEMA);
+    c.header('X-Payment-Required', `network=base; amount=${SERP_PRICE_USDC}; asset=USDC; payTo=${baseRecipient}`);
+    return c.json(challenge, 402);
+  }
+  if (payment.network !== 'base') {
+    return c.json({ error: 'This endpoint only accepts payments on Base', requiredNetwork: 'base' }, 402);
+  }
 
-  const query = c.req.query('query') || c.req.query('q');
-  if (!query) return c.json({ error: 'Missing required parameter: query' }, 400);
+  const verification = await verifyPayment(payment, baseRecipient, SERP_PRICE_USDC);
+  if (!verification.valid) {
+    return c.json({
+      error: 'Payment verification failed',
+      reason: verification.error,
+      hint: `Send ${SERP_PRICE_USDC} USDC on Base to the recipient address and pass the tx hash in the Payment-Signature header.`,
+    }, 402);
+  }
 
-  const location = c.req.query('location') || c.req.query('loc') || undefined;
-  const num = parseInt(c.req.query('num') || '10');
+  // ─── INPUT ───
+  const query = c.req.query('q') || c.req.query('query');
+  if (!query) {
+    return c.json({ error: 'Missing required parameter: q', hint: 'GET /api/serp?q=your+search' }, 400);
+  }
+  const max = Math.max(1, Math.min(20, parseInt(c.req.query('max') || c.req.query('num') || '10')));
+  const hl = c.req.query('hl') || 'en';
+  const gl = c.req.query('gl') || 'us';
 
+  // ─── SCRAPE ───
   try {
-    const proxy = getProxy();
-    const ip = await getProxyExitIp();
-    const results = await scrapeMobileSERP(query, { location, num });
+    const result = await scrapeSerpMobile(query, { timeoutMs: SERP_TIMEOUT_MS, max, hl, gl });
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
 
+    if (result.error && result.results.length === 0) {
+      return c.json({
+        error: 'SERP scrape failed',
+        reason: result.error,
+        http_status: result.http_status,
+        payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
+      }, 502);
+    }
+
     return c.json({
-      query,
-      results,
-      meta: { location, num, proxy: { ip, country: proxy.country, type: 'mobile' } },
+      query: result.query,
+      count: result.count,
+      results: result.results,
+      meta: {
+        device: result.device,
+        used_user_agent: result.used_user_agent,
+        http_status: result.http_status,
+      },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
   } catch (err: any) {
     return c.json({ error: 'SERP scrape failed', message: err?.message || String(err) }, 502);
   }
-});
+}
+
+serviceRouter.get('/serp', handleSerp);
+serviceRouter.post('/serp', handleSerp);
