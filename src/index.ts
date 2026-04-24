@@ -98,7 +98,22 @@ app.get('/health', (c) => c.json({
   ],
 }));
 
-app.get('/', (c) => c.json({
+// ─── WALLET CONFIG (strict — env-only, no demo fallbacks) ───
+function getRecipients() {
+  const solana = process.env.WALLET_ADDRESS;
+  const base = process.env.WALLET_ADDRESS_BASE || solana;
+  if (!solana || !base) {
+    throw new Error('WALLET_ADDRESS (and/or WALLET_ADDRESS_BASE) env var is not set');
+  }
+  return { solana, base };
+}
+
+app.get('/', (c) => {
+  let recipients: { solana: string; base: string };
+  try { recipients = getRecipients(); } catch (err: any) {
+    return c.json({ error: 'Service misconfigured', reason: err.message }, 500);
+  }
+  return c.json({
   name: process.env.SERVICE_NAME || 'marketplace-service-hub',
   description: process.env.SERVICE_DESCRIPTION || 'AI agent intelligence services powered by real 4G/5G mobile proxies.',
   version: '2.0.0',
@@ -139,7 +154,7 @@ app.get('/', (c) => c.json({
       {
         network: 'solana',
         chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-        recipient: '6eUdVwsPArTxwVqEARYGCh4S2qwW2zCs7jSEDRpxydnv',
+        recipient: recipients.solana,
         asset: 'USDC',
         assetAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
         settlementTime: '~400ms',
@@ -147,7 +162,7 @@ app.get('/', (c) => c.json({
       {
         network: 'base',
         chainId: 'eip155:8453',
-        recipient: '0xF8cD900794245fc36CBE65be9afc23CDF5103042',
+        recipient: recipients.base,
         asset: 'USDC',
         assetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         settlementTime: '~2s',
@@ -160,7 +175,8 @@ app.get('/', (c) => c.json({
     skillFile: 'https://agents.proxies.sx/marketplace/skill.md',
     github: 'https://github.com/bolivian-peru/marketplace-service-template',
   },
-}));
+});
+});
 
 app.route('/api', serviceRouter);
 

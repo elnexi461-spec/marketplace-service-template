@@ -125,10 +125,12 @@ export function build402Response(
         asset: 'USDC',
         assetAddress: USDC_SOLANA,
       },
+      // Base recipient is REQUIRED — no demo fallback. If WALLET_ADDRESS_BASE
+      // is not set, fall back to WALLET_ADDRESS (must still be configured).
       {
         network: 'base',
         chainId: 'eip155:8453',
-        recipient: process.env.WALLET_ADDRESS_BASE || '0xF8cD900794245fc36CBE65be9afc23CDF5103042',
+        recipient: process.env.WALLET_ADDRESS_BASE || walletAddress,
         asset: 'USDC',
         assetAddress: USDC_BASE,
       },
