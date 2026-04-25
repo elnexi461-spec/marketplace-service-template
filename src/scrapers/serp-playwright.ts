@@ -72,7 +72,7 @@ let _browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.isConnected()) return _browser;
   const executablePath = process.env.REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined;
-  _browser = await stealthChromium.launch({
+  const browser = await stealthChromium.launch({
     headless: true,
     executablePath,
     args: [
@@ -82,7 +82,8 @@ async function getBrowser(): Promise<Browser> {
       '--disable-gpu',
     ],
   });
-  return _browser;
+  _browser = browser;
+  return browser;
 }
 
 export async function closeSerpBrowser(): Promise<void> {

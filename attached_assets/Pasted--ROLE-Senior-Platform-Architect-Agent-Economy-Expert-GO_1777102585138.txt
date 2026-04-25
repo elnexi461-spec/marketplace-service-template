@@ -1,0 +1,31 @@
+# ROLE: Senior Platform Architect & Agent-Economy Expert
+# GOAL: Build a self-healing, x402 V2-compliant "Social Intelligence Hub" on Replit.
+
+## 1. INFRASTRUCTURE & ERROR-CHECKING (START)
+- Initialize a Hono.js server optimized for Bun.
+- CONSOLE FIX: Before starting the server, write a logic check that verifies 'playwright' dependencies. If Chromium is missing, output the exact 'npx playwright install' command to the console automatically.
+- IMPLEMENT HEALER: Create a global error handler that catches 'Target Closed' or 'Proxy Timeout' and returns a standardized JSON { status: "retrying", code: 429 } instead of crashing.
+
+## 2. THE BOUNTY LOGIC (LINKEDIN & INSTAGRAM)
+- LInkedIn: Build an /api/linkedin/person endpoint. Use 'playwright-extra' with Stealth. 
+- Instagram: Build an /api/instagram/profile/:username endpoint.
+- STEALTH PROTOCOL 2026: 
+    - Emulate an iPhone 14 (iOS 17.6) User Agent.
+    - Set 'deviceScaleFactor: 3' and 'hasTouch: true'.
+    - Force all requests through 'process.env.PROXY_URL' (Mobile 4G/5G).
+    - If a 'Login Wall' is detected, the API must return HTTP 402 with the payment header to signal the agent to rotate proxies.
+
+## 3. x402 V2 PAYMENT INTEGRATION
+Implement the precise pricing object to ensure I get paid:
+- Solana: chainId 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', recipient 'BVLVkVKhwd8WCT7ypkztCYenLReGA7sj1SejcieVX9A3'.
+- Base: chainId 'eip155:8453', recipient '0xbDD6f813925F0357fc0D670E31c89F1a451851fa'.
+- Set Asset to 'USDC' for both.
+
+## 4. MAINTAINER "WOW" FEATURES (RECOOMENDATIONS)
+- DISCOVERY: Implement 'GET /' which returns a beautiful JSON Manifest of all capabilities.
+- TELEMETRY: Add a 'X-Agent-Health' header to all responses showing the proxy latency in milliseconds.
+- LOGGING: Use a professional logger (like Pino) to show [REQUEST], [PAYMENT_VERIFIED], and [DATA_SHIPPED] in the Replit console.
+
+## 5. TEST & FINISH
+- Generate a 'test.ts' script that I can run to verify the LinkedIn scraper works without a login.
+- Final Output: Provide the full 'src/index.ts' and a professional 'README.md' formatted as a "Service Provider Proposal" for the maintainers.

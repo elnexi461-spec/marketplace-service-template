@@ -396,6 +396,7 @@ serviceRouter.get('/details', async (c) => {
 
 serviceRouter.get('/jobs', async (c) => {
   const walletAddress = process.env.WALLET_ADDRESS;
+  if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
   if (!payment) {
