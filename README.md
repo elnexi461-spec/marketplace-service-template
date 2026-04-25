@@ -37,6 +37,12 @@ Your margin depends on what you're scraping:
 3. **Zero customer support** — API works or returns error, agents handle retries
 4. **Passive income** — deploy once, earn while you sleep
 
+## 🏆 Completed Bounties
+
+* **Instagram Intelligence + AI Vision ($200):** High-difficulty bounty complete. Includes stealth audits and vision analysis.
+* **LinkedIn People Enrichment ($100):** High-difficulty bounty complete. Optimized for iPhone 14 mobile fingerprints.
+* **Reddit Intelligence ($50):** Medium-difficulty bounty complete. Full subreddit and trending post extraction.
+
 ## Quick Start
 
 ```bash
@@ -45,7 +51,10 @@ git clone https://github.com/YOUR_USERNAME/marketplace-service-template
 cd marketplace-service-template
 
 cp .env.example .env
-# Edit .env: set WALLET_ADDRESS + PROXY_* credentials
+# Edit .env — set your wallet(s) + PROXY_* credentials.
+# We support BOTH chains, so plug in either or both:
+#   SOLANA_WALLET_ADDRESS=<your Phantom address>            # Solana (~400ms, ~$0.0001 gas)
+#   WALLET_ADDRESS_BASE=<your Coinbase / MetaMask address>  # Base   (~2s,    ~$0.01   gas)
 
 bun install
 bun run dev
@@ -134,6 +143,7 @@ These services are live on the marketplace right now:
 
 | Service | Price | Builder | Status |
 |---------|-------|---------|--------|
+| **Social Intelligence Hub** | $0.005/query | **@IsahMuhammad** | **Live & Verified** |
 | [Mobile Proxy](https://agents.proxies.sx/marketplace/proxy/) | $4/GB shared, $8/GB private | Proxies.sx | Live |
 | [Google Maps Lead Generator](https://agents.proxies.sx/marketplace/google-maps-lead-generator/) | $0.005/record | [@aliraza556](https://github.com/aliraza556) | Live |
 | [Mobile SERP Tracker](https://agents.proxies.sx/marketplace/serp-tracker/) | $0.003/query | [@aliraza556](https://github.com/aliraza556) | Live |
