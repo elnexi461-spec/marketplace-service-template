@@ -100,10 +100,10 @@ app.get('/health', (c) => c.json({
 
 // ─── WALLET CONFIG (strict — env-only, no demo fallbacks) ───
 function getRecipients() {
-  const solana = process.env.WALLET_ADDRESS;
-  const base = process.env.WALLET_ADDRESS_BASE || solana;
+  const solana = process.env.SOLANA_WALLET_ADDRESS;
+  const base = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS;
   if (!solana || !base) {
-    throw new Error('WALLET_ADDRESS (and/or WALLET_ADDRESS_BASE) env var is not set');
+    throw new Error('SOLANA_WALLET_ADDRESS and WALLET_ADDRESS_BASE (or WALLET_ADDRESS) env vars must be set');
   }
   return { solana, base };
 }
