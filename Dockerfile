@@ -1,7 +1,7 @@
-# 1. Use the official Apify Bun image (it handles all permissions/tini)
+# 1. Use the official Apify Bun image (pre-configured for their platform)
 FROM apify/actor-node-bun:latest
 
-# 2. Switch to root just to install Playwright system dependencies
+# 2. Switch to root to install Playwright's system dependencies
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,23 +11,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Setup the working directory (standard Apify path)
+# 3. Setup the working directory
 WORKDIR /usr/src/app
 
-# 4. Copy package files first for caching
+# 4. Copy package files using the correct Apify user (myuser)
 COPY --chown=myuser:myuser package.json bun.lock* ./
 
-# 5. Switch to the built-in 'myuser' (Apify standard)
+# 5. Switch back to the non-root user 'myuser'
 USER myuser
 
-# Install dependencies
+# Install project dependencies
 RUN bun install --frozen-lockfile --production
 
-# Install Playwright Chromium
+# Install Playwright Chromium into the user's home directory
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/myuser/pw-browsers
 RUN bunx playwright install chromium
 
-# 6. Copy the rest of your source code
+# 6. Copy the rest of the source code
 COPY --chown=myuser:myuser src ./src
 COPY --chown=myuser:myuser tsconfig.json ./
 
@@ -35,6 +35,5 @@ ENV NODE_ENV=production
 ENV PORT=5000
 EXPOSE 5000
 
-# The Apify image expects 'npm start', but we'll point it to bun
-# We use the full path to be 100% sure on permissions
-CMD ["/usr/local/bin/bun", "run", "src/index.ts"]
+# Start using the pre-installed Bun binary provided by the image
+CMD ["bun", "run", "src/index.ts"]
