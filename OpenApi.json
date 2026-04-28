@@ -1,29 +1,33 @@
 {
   "openapi": "3.0.0",
   "info": {
-    "title": "Nexi AI Agent Intelligence Suite",
-    "description": "AI agent intelligence services powered by real 4G/5G mobile proxies. Includes E-commerce, Social Media, Real Estate, and Job Market data extraction.",
-    "version": "2.0.0"
+    "title": "EL-BADOO INTELLIGENCE HUB",
+    "description": "Premium AI agent intelligence services powered by elite 4G/5G mobile proxies. High-fidelity extraction for E-commerce, Social Media, Real Estate, and Job Markets.",
+    "contact": {
+      "name": "Isah Muhammad Muhammad",
+      "url": "https://github.com/Isahmm"
+    },
+    "version": "2.5.0"
   },
   "servers": [
     {
       "url": "https://marketplace-service-template--ogeeel513.replit.app/",
-      "description": "Main Production Gateway"
+      "description": "Production Server - El-Badoo Hub"
     }
   ],
   "paths": {
-    "/api/scrape": { "post": { "summary": "General E-Commerce Scraper", "description": "Monitor Amazon/eBay/generic product pages." } },
-    "/api/run": { "post": { "summary": "Google Maps Lead Generator", "description": "Search businesses by category + location." } },
-    "/api/details": { "get": { "summary": "Google Maps Place Details", "description": "Detailed business info by Place ID." } },
-    "/api/serp": { "get": { "summary": "Mobile SERP Scraper", "description": "Google organic results via Playwright + iPhone 13 stealth." } },
-    "/api/jobs": { "get": { "summary": "Job Market Intelligence", "description": "Get job listings from Indeed/LinkedIn with salary + proxy metadata." } },
-    "/api/linkedin/person": { "post": { "summary": "LinkedIn Person Profile", "description": "Full profile enrichment by profile URL." } },
-    "/api/linkedin/company": { "post": { "summary": "LinkedIn Company Scraper", "description": "Detailed company profile and employee insights." } },
-    "/api/instagram/profile": { "post": { "summary": "Instagram Profile Data", "description": "Deep extraction of IG profile metadata." } },
-    "/api/instagram/audit": { "post": { "summary": "Instagram Authenticity Audit", "description": "Analyze account for fake followers/engagement." } },
-    "/api/instagram/analyze": { "post": { "summary": "AI Vision Analysis", "description": "AI-powered analysis of Instagram images." } },
-    "/api/airbnb/search": { "get": { "summary": "Airbnb Property Search", "description": "Search listings by location and price." } },
-    "/api/airbnb/market-stats": { "get": { "summary": "Airbnb Market Analytics", "description": "Get pricing trends and market statistics." } },
-    "/api/trending": { "get": { "summary": "Trending Topics Intelligence", "description": "Aggregated trends across top social platforms." } }
+    "/api/scrape": { "post": { "tags": ["E-Commerce"], "summary": "Global Retail Scraper", "description": "Amazon, eBay, and generic retail data monitoring." } },
+    "/api/run": { "post": { "tags": ["Lead Generation"], "summary": "Google Maps Lead Factory", "description": "Generate B2B leads by category and location." } },
+    "/api/details": { "get": { "tags": ["Lead Generation"], "summary": "Business Deep-Dive", "description": "Detailed place data extraction by ID." } },
+    "/api/serp": { "get": { "tags": ["Search"], "summary": "Mobile Search Intelligence", "description": "iPhone 13-emulated SERP data." } },
+    "/api/jobs": { "get": { "tags": ["Recruitment"], "summary": "Job Market Data", "description": "Indeed & LinkedIn job listings with salary data." } },
+    "/api/linkedin/person": { "post": { "tags": ["LinkedIn"], "summary": "Person Enrichment", "description": "Full profile data retrieval." } },
+    "/api/linkedin/company": { "post": { "tags": ["LinkedIn"], "summary": "Company Insights", "description": "Extracting company profiles and employee stats." } },
+    "/api/instagram/profile": { "post": { "tags": ["Instagram"], "summary": "IG Profile Extraction", "description": "Deep metadata from Instagram profiles." } },
+    "/api/instagram/audit": { "post": { "tags": ["Instagram"], "summary": "Profile Authenticity Audit", "description": "Fake follower and engagement detection." } },
+    "/api/instagram/analyze": { "post": { "tags": ["AI Vision"], "summary": "Image Vision Analysis", "description": "AI-powered content analysis of IG media." } },
+    "/api/airbnb/search": { "get": { "tags": ["Real Estate"], "summary": "Property Search", "description": "Search listings globally by price/location." } },
+    "/api/airbnb/market-stats": { "get": { "tags": ["Real Estate"], "summary": "Market Analytics", "description": "Predictive pricing and market data." } },
+    "/api/trending": { "get": { "tags": ["Trends"], "summary": "Global Viral Intelligence", "description": "Real-time trends across social ecosystems." } }
   }
 }
