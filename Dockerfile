@@ -1,4 +1,4 @@
-# Render uses the PORT environment variable automatically
+# Render uses PORT PORT environment variable automatically
 ENV PORT=10000
 EXPOSE 10000
 
