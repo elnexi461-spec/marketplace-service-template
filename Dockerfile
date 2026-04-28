@@ -27,8 +27,9 @@ RUN bunx playwright install chromium --with-deps || true
 COPY src ./src
 COPY tsconfig.json ./
 
-# Non-root user
+# Non-root user - Added explicit permissions for Bun and App directory
 RUN useradd -ms /bin/bash app && chown -R app:app /app
+RUN chmod -R 755 /root/.bun/bin && chmod +x /usr/local/bin/bun
 USER app
 
 ENV NODE_ENV=production
