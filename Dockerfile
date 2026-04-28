@@ -8,7 +8,7 @@
 FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS base
 WORKDIR /app
 
-# Install Bun (no Node-specific tooling needed at runtime)
+# Install Bun
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl unzip ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
@@ -27,9 +27,10 @@ RUN bunx playwright install chromium --with-deps || true
 COPY src ./src
 COPY tsconfig.json ./
 
-# Non-root user - Added explicit permissions for Bun and App directory
+# Non-root user - Fixed permission logic
 RUN useradd -ms /bin/bash app && chown -R app:app /app
-RUN chmod -R 755 /root/.bun/bin && chmod +x /usr/local/bin/bun
+# Move bun to a globally accessible location and set permissions before switching user
+RUN cp /usr/local/bin/bun /usr/bin/bun && chmod 755 /usr/bin/bun
 USER app
 
 ENV NODE_ENV=production
