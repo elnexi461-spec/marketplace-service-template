@@ -1,0 +1,29 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Nexi AI Agent Intelligence Suite",
+    "description": "AI agent intelligence services powered by real 4G/5G mobile proxies. Includes E-commerce, Social Media, Real Estate, and Job Market data extraction.",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://marketplace-service-template--ogeeel513.replit.app/",
+      "description": "Main Production Gateway"
+    }
+  ],
+  "paths": {
+    "/api/scrape": { "post": { "summary": "General E-Commerce Scraper", "description": "Monitor Amazon/eBay/generic product pages." } },
+    "/api/run": { "post": { "summary": "Google Maps Lead Generator", "description": "Search businesses by category + location." } },
+    "/api/details": { "get": { "summary": "Google Maps Place Details", "description": "Detailed business info by Place ID." } },
+    "/api/serp": { "get": { "summary": "Mobile SERP Scraper", "description": "Google organic results via Playwright + iPhone 13 stealth." } },
+    "/api/jobs": { "get": { "summary": "Job Market Intelligence", "description": "Get job listings from Indeed/LinkedIn with salary + proxy metadata." } },
+    "/api/linkedin/person": { "post": { "summary": "LinkedIn Person Profile", "description": "Full profile enrichment by profile URL." } },
+    "/api/linkedin/company": { "post": { "summary": "LinkedIn Company Scraper", "description": "Detailed company profile and employee insights." } },
+    "/api/instagram/profile": { "post": { "summary": "Instagram Profile Data", "description": "Deep extraction of IG profile metadata." } },
+    "/api/instagram/audit": { "post": { "summary": "Instagram Authenticity Audit", "description": "Analyze account for fake followers/engagement." } },
+    "/api/instagram/analyze": { "post": { "summary": "AI Vision Analysis", "description": "AI-powered analysis of Instagram images." } },
+    "/api/airbnb/search": { "get": { "summary": "Airbnb Property Search", "description": "Search listings by location and price." } },
+    "/api/airbnb/market-stats": { "get": { "summary": "Airbnb Market Analytics", "description": "Get pricing trends and market statistics." } },
+    "/api/trending": { "get": { "summary": "Trending Topics Intelligence", "description": "Aggregated trends across top social platforms." } }
+  }
+}
