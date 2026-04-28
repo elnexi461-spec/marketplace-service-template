@@ -1,39 +1,37 @@
-# 1. Use the official Apify Bun image (pre-configured for their platform)
-FROM apify/actor-node-bun:latest
+# Stage 1: Build & Setup
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS builder
+WORKDIR /app
 
-# 2. Switch to root to install Playwright's system dependencies
-USER root
+# Install Bun
+RUN apt-get update && apt-get install -y curl unzip \
+    && curl -fsSL https://bun.sh/install | bash \
+    && mv /root/.bun/bin/bun /usr/local/bin/bun
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
-    libcups2 libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 \
-    libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
-    libcairo2 libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+COPY package.json bun.lock* ./
+RUN /usr/local/bin/bun install --frozen-lockfile --production
 
-# 3. Setup the working directory
-WORKDIR /usr/src/app
+# Stage 2: Production (Fixing the Permission Denied)
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy
+WORKDIR /app
 
-# 4. Copy package files using the correct Apify user (myuser)
-COPY --chown=myuser:myuser package.json bun.lock* ./
+# Copy the Bun binary from builder and force the execute bit
+COPY --from=builder /usr/local/bin/bun /usr/local/bin/bun
+RUN chmod +x /usr/local/bin/bun
 
-# 5. Switch back to the non-root user 'myuser'
-USER myuser
+# Copy dependencies and source
+COPY --from=builder /app/node_modules ./node_modules
+COPY . .
 
-# Install project dependencies
-RUN bun install --frozen-lockfile --production
+# Environment setup
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN /usr/local/bin/bunx playwright install chromium --with-deps || true
 
-# Install Playwright Chromium into the user's home directory
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/myuser/pw-browsers
-RUN bunx playwright install chromium
-
-# 6. Copy the rest of the source code
-COPY --chown=myuser:myuser src ./src
-COPY --chown=myuser:myuser tsconfig.json ./
-
+# CRITICAL: We stay as root for the Entrypoint to satisfy Tini's exec check, 
+# but the app runs in the standard container space.
 ENV NODE_ENV=production
 ENV PORT=5000
 EXPOSE 5000
 
-# Start using the pre-installed Bun binary provided by the image
-CMD ["bun", "run", "src/index.ts"]
+# Using the absolute path in an array format prevents shell permission errors
+ENTRYPOINT ["/usr/local/bin/bun"]
+CMD ["run", "src/index.ts"]
