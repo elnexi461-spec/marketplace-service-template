@@ -8,7 +8,11 @@
  * generic JSON-LD / OpenGraph fallback for other sites.
  */
 
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+// Memory-efficient: playwright-core is a slim runtime (no bundled browser
+// download). We pair it with playwright-extra's stealth plugin and pass
+// `--single-process` to Chromium so the whole pipeline fits comfortably
+// on 2 GB devices.
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { addExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -67,6 +71,11 @@ async function getBrowser(): Promise<Browser> {
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
       '--disable-gpu',
+      // Memory-efficient single-process mode for 2 GB RAM devices.
+      '--single-process',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-background-networking',
     ],
   });
   _browser = browser;
@@ -82,20 +91,28 @@ export async function closeBrowser(): Promise<void> {
 
 // ─── PUBLIC API ─────────────────────────────────────
 
-export async function scrapePrice(url: string, opts: { timeoutMs?: number } = {}): Promise<ScrapeResult> {
+export async function scrapePrice(
+  url: string,
+  opts: { timeoutMs?: number; singleAttempt?: boolean; uaIndex?: number } = {},
+): Promise<ScrapeResult> {
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const source = detectSource(url);
 
   let lastError: string | undefined;
   let lastStatus: number | undefined;
   let attempts = 0;
-  let lastUA = MOBILE_USER_AGENTS[0]!;
+  // When the caller (self-healing wrapper) drives retries, do a single pass
+  // and let the outer circuit-breaker decide when to retry. This avoids
+  // double-retrying and keeps memory usage flat.
+  const passes = opts.singleAttempt ? 1 : 2;
+  const startUA = opts.uaIndex ?? 0;
+  let lastUA = MOBILE_USER_AGENTS[startUA % MOBILE_USER_AGENTS.length]!;
 
-  // Up to 2 attempts: original UA, then a fallback UA (self-heal).
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < passes; i++) {
     attempts++;
-    const ua = MOBILE_USER_AGENTS[i % MOBILE_USER_AGENTS.length]!;
-    const viewport = MOBILE_VIEWPORTS[i % MOBILE_VIEWPORTS.length]!;
+    const slot = (startUA + i) % MOBILE_USER_AGENTS.length;
+    const ua = MOBILE_USER_AGENTS[slot]!;
+    const viewport = MOBILE_VIEWPORTS[slot % MOBILE_VIEWPORTS.length]!;
     lastUA = ua;
 
     let context: BrowserContext | null = null;

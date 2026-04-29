@@ -1,83 +1,77 @@
-# Marketplace Service Template
+# EL-BADOO Premium 4G Scraping Hub
 
 ## Overview
-A Hono-based HTTP API server (running on Bun) that exposes x402-gated services on top of Proxies.sx mobile proxy infrastructure. Endpoints include Google Maps, SERP tracking, job listings, reviews, LinkedIn, Reddit, Instagram, Airbnb, and trend research.
+A Hono-based HTTP API server (running on Bun) that exposes scraping services gated by the **Coinbase x402** paywall using the **Managed Facilitator**. The flagship endpoint is `POST /api/scrape` at **$0.05 USDC on Base** per successful request. Additional endpoints (Maps, SERP, jobs, reviews, LinkedIn, Reddit, Instagram, Airbnb, research, trending) are mounted from `src/service.ts` and continue to use the legacy custom payment helper.
 
 ## Tech Stack
-- Runtime: Bun 1.x
-- Framework: Hono 4
+- Runtime: **Bun 1.x**
+- Framework: **Hono 4**
 - Language: TypeScript
-- Scraping: Playwright (Chromium) + `puppeteer-extra-plugin-stealth` via `playwright-extra`
-- No frontend — JSON HTTP API only
+- Paywall: **`x402-hono` + `@coinbase/x402`** (Coinbase Managed Facilitator). `x402-express` is the Express equivalent — we use the Hono build because the app is Hono-based.
+- Browser automation: **`playwright-core`** (slim runtime) + `playwright-extra` + `puppeteer-extra-plugin-stealth`, launched with `--single-process` for 2 GB RAM devices.
+- No frontend — JSON HTTP API only.
 
-## E-Commerce Price & Stock Monitor (Bounty Wave 2)
-`POST /api/scrape` — gated by x402 V2 at **0.002 USDC on Base** (= 2000 base units).
+## x402 Paywall (Coinbase Managed Facilitator)
+Configured in `src/x402-config.ts`:
+- Reads `CDP_API_KEY_NAME`, `CDP_API_KEY_PRIVATE_KEY`, `USDC_RECEIVER_ADDRESS` from Replit Secrets.
+- Uses `@coinbase/x402`'s `createFacilitatorConfig(apiKeyId, apiKeySecret)` to sign verify/settle calls against the Coinbase facilitator.
+- Mounts `paymentMiddleware` from `x402-hono` on `POST /api/scrape` at **$0.05 USDC on Base**.
+- Falls back to the public `x402.org/facilitator` (testnet) if CDP creds are missing.
 
-Body:
-```json
-{ "url": "https://www.amazon.com/dp/..." }
-```
+## Self-Healing Engine (`src/self-healing.ts`)
+`withSelfHealing(op, options)` wraps any scraping operation with an **error-recovery circuit breaker**:
+- **403 Forbidden** → 30-second wait for the 4G mobile IP to rotate, then retry.
+- **Timeout** → linear backoff retry.
+- **DOM mismatch** → fallback selector pass + HTML structure log via `onDomMismatch`, retry.
+- **Other** (network / unknown) → exponential backoff.
+- **Hard cap: 3 attempts**, then returns a settled failure (HTTP 500 envelope) so the caller can respond cleanly without wasting payment data.
 
-Response (after payment):
-```json
-{
-  "product_name": "string",
-  "current_price": 0.00,
-  "currency": "USD",
-  "in_stock": true,
-  "timestamp": "2026-04-24T00:00:00Z",
-  "meta": { "source": "amazon|ebay|generic", "attempts": 1, "used_user_agent": "...", "http_status": 200 },
-  "payment": { "txHash": "0x...", "network": "base", "amount": 0.002, "settled": true }
-}
-```
+`classifyFailure(err)` inspects an error / `{ http_status, error }` envelope and returns one of `forbidden_403 | timeout | dom_mismatch | network | unknown`. Throw `CircuitBreakerError(kind, message, htmlSnippet?)` from your operation to force a specific classification.
 
-Scraper guarantees:
-- Headless Chromium with mobile emulation (iPhone / Pixel / Galaxy UA + viewport)
-- CSS / images / fonts / media blocked at the network level for speed
-- 5 s page-load timeout (override with `SCRAPE_TIMEOUT_MS`)
-- Self-heal: if the first attempt fails or hits a bot wall, retry once with a different mobile UA + viewport
-- Graceful 404 / out-of-stock handling — never crashes the service
-- Falls back to JSON-LD / OpenGraph parsing when site-specific selectors miss
+## Discovery Extension (`src/discovery.ts`)
+`declareDiscoveryExtension({ baseUrl?, resourcePath?, extra? })` builds the metadata that the **Coinbase Bazaar** and other agent indexers consume:
+- Name: `EL-BADOO Premium 4G Scraping Hub`
+- Description: `High-trust, mobile-first lead enrichment via authentic Nigerian 4G cluster. 30s IP rotation enabled.`
+- Network: `base`, Asset: USDC, Price: `$0.05`, payTo: `USDC_RECEIVER_ADDRESS`.
+- Capabilities + tags + EL-BADOO-specific `extra` (proxy region, IP rotation, runtime, browser).
+
+Served live at `GET /.well-known/x402` and exported from `src/index.ts` for static tooling.
 
 ## Project Layout
-- `src/index.ts` — server entry (Hono app, middleware, routes mount)
-- `src/service.ts` — main `serviceRouter` mounted at `/api`
-- `src/routes/` — additional routers (research, trending)
-- `src/scrapers/` — per-source scrapers (maps, reviews, jobs, linkedin, reddit, instagram, airbnb, etc.)
-- `src/payment.ts`, `src/proxy.ts` — x402 payment + Proxies.sx proxy helpers
-- `src/analysis/`, `src/utils/`, `src/types/` — supporting modules
-- `listings/` — JSON service listings
-- `tests/` — Bun test files
+- `src/index.ts` — Hono entry: middleware, x402 paywall mount, discovery, catalog, mounts `/api`.
+- `src/x402-config.ts` — paywall + Managed Facilitator wiring.
+- `src/self-healing.ts` — circuit-breaker / retry / classification.
+- `src/discovery.ts` — Bazaar discovery extension.
+- `src/service.ts` — `serviceRouter` mounted at `/api`. `POST /api/scrape` runs the self-healing wrapper around `scrapePrice`. Other endpoints (`/api/run`, `/api/jobs`, `/api/reviews/*`, etc.) keep their existing per-route payment logic.
+- `src/scrapers/price-monitor.ts` — Playwright-Core / Chromium scraper with `--single-process`.
+- `src/scrapers/*` — per-source scrapers (maps, reviews, jobs, linkedin, reddit, instagram, airbnb, etc.).
+- `src/payment.ts`, `src/proxy.ts` — legacy x402 verify helper + Proxies.sx proxy helpers.
+- `listings/`, `tests/` — JSON listings + Bun test files.
 
 ## Running Locally
 The "Start application" workflow runs:
 ```
 PORT=5000 bun run src/index.ts
 ```
-The server binds `0.0.0.0:5000`. Useful endpoints:
-- `GET /` — service catalog with pricing
-- `GET /health` — health check
-- `GET /api/*` — per-service routes (most require x402 payment headers; see `DEMO-ENDPOINTS.md`)
+Bound to `0.0.0.0:5000`. Useful endpoints:
+- `GET /` — service catalog with paywall + self-healing config
+- `GET /health` — health check (`paywall: active|misconfigured`)
+- `GET /.well-known/x402` — discovery extension JSON
+- `POST /api/scrape` — paid endpoint ($0.05 USDC on Base, Coinbase Managed Facilitator)
 
-## Configuration
-Environment variables (see `.env.example`):
-- `WALLET_ADDRESS`, `WALLET_ADDRESS_BASE` — payout wallets
-- `SCRAPE_PRICE_USDC` (default `0.002`), `SCRAPE_TIMEOUT_MS` (default `5000`) — price-monitor settings
-- `SERVICE_NAME`, `SERVICE_DESCRIPTION`, `PRICE_USDC`, etc. — service metadata
-- `PROXY_HOST`, `PROXY_HTTP_PORT`, `PROXY_USER`, `PROXY_PASS`, `PROXY_COUNTRY` — Proxies.sx credentials
-- `PORT` (defaults to 3000; the Replit workflow sets it to 5000)
-- `RATE_LIMIT` — requests per minute per IP
-- `REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE` / `REPLIT_LD_LIBRARY_PATH` — auto-set by the Nix `playwright-driver` package; the workflow forwards them to the Bun process so Playwright can launch.
+## Required Secrets
+Set in Replit Secrets:
+- `CDP_API_KEY_NAME` — Coinbase Developer Platform key id
+- `CDP_API_KEY_PRIVATE_KEY` — CDP key secret
+- `USDC_RECEIVER_ADDRESS` — Base wallet that receives USDC
 
-## Verifying the x402 Flow
-Run the included test script (no real USDC needed):
-```bash
-./test_x402.sh
-# or with a real Base tx hash to exercise the full happy path:
-./test_x402.sh --with-payment 0x<tx_hash>
-```
+Optional:
+- `WALLET_ADDRESS_BASE` / `WALLET_ADDRESS` — fallbacks for receiver, also used by legacy endpoints.
+- `SCRAPE_TIMEOUT_MS` — Playwright nav timeout (default 5000).
+- `RATE_LIMIT` — req/min per IP (default 60).
+- `PUBLIC_BASE_URL` — overrides discovery `resource` URL.
 
 ## Deployment
-- **Replit Autoscale**: configured (`bun run src/index.ts`) — Replit's Nix layer provides the Chromium binary + libraries automatically.
+- **Replit Autoscale** is configured (`bun run src/index.ts`). The Nix layer provides Chromium + libs.
 - **Railway / Coolify**: see `nixpacks.toml`.
-- **Docker**: see `Dockerfile` (uses `mcr.microsoft.com/playwright` base for pre-installed Chromium libs).
+- **Docker**: see `Dockerfile`.

@@ -30,12 +30,15 @@ import {
 import { getProfile, getPosts, analyzeProfile, analyzeImages, auditProfile } from './scrapers/instagram-scraper';
 import { searchReddit, getSubreddit, getTrending, getComments } from './scrapers/reddit-scraper';
 import { scrapePrice } from './scrapers/price-monitor';
+import { withSelfHealing, CircuitBreakerError, type AttemptContext } from './self-healing';
 
 export const serviceRouter = new Hono();
 
-// ─── PRICE MONITOR (Bounty Wave 2 — E-Commerce Price & Stock) ───
-const SCRAPE_PRICE_USDC = parseFloat(process.env.SCRAPE_PRICE_USDC || '0.002');
-const SCRAPE_DESCRIPTION = 'E-Commerce Price & Stock Monitor — fetches product name, price, currency, and stock status from Amazon, eBay, and other product pages.';
+// ─── PRICE MONITOR — gated by x402 Managed Facilitator at $0.05 USDC on Base.
+// The price string in src/x402-config.ts is the source of truth used by the
+// middleware; this constant only powers the discovery / 402-preview helpers.
+const SCRAPE_PRICE_USDC = parseFloat(process.env.SCRAPE_PRICE_USDC || '0.05');
+const SCRAPE_DESCRIPTION = 'EL-BADOO Premium 4G Scraping Hub — high-trust mobile-first product scrape (Amazon / eBay / generic) with self-healing 4G IP rotation.';
 const SCRAPE_TIMEOUT_MS = parseInt(process.env.SCRAPE_TIMEOUT_MS || '5000');
 const SCRAPE_OUTPUT_SCHEMA = {
   input: { url: 'string — full product page URL (Amazon, eBay, or generic product page)' },
@@ -85,38 +88,22 @@ function build402BaseOnly(
   };
 }
 
+/**
+ * POST /api/scrape — gated upstream by the x402 paywall middleware
+ * (Coinbase Managed Facilitator, $0.05 USDC on Base — see src/x402-config.ts).
+ * By the time this handler runs, payment is already verified + settled.
+ *
+ * The scrape itself is wrapped in the self-healing circuit breaker:
+ *   • 403 Forbidden  → 30s wait for 4G IP rotation, then retry
+ *   • Timeout        → linear backoff retry
+ *   • DOM mismatch   → fallback selector pass + HTML log, retry
+ *   • Max 3 attempts → settled 500 returned to caller
+ */
 serviceRouter.post('/scrape', async (c) => {
-  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS;
-  if (!baseRecipient) {
-    return c.json({ error: 'Service misconfigured: WALLET_ADDRESS_BASE (or WALLET_ADDRESS) not set' }, 500);
-  }
-
-  // Parse body up-front so we can echo the URL on 402.
   let body: any = null;
   try { body = await c.req.json(); } catch { /* tolerate empty body */ }
   const url: string | undefined = body?.url;
 
-  // ─── x402 PAYMENT GATE ───
-  const payment = extractPayment(c);
-  if (!payment) {
-    const challenge = build402BaseOnly('/api/scrape', SCRAPE_DESCRIPTION, SCRAPE_PRICE_USDC);
-    c.header('X-Payment-Required', `network=base; amount=${SCRAPE_PRICE_USDC}; asset=USDC; payTo=${baseRecipient}`);
-    return c.json(challenge, 402);
-  }
-  if (payment.network !== 'base') {
-    return c.json({ error: 'This endpoint only accepts payments on Base', requiredNetwork: 'base' }, 402);
-  }
-
-  const verification = await verifyPayment(payment, baseRecipient, SCRAPE_PRICE_USDC);
-  if (!verification.valid) {
-    return c.json({
-      error: 'Payment verification failed',
-      reason: verification.error,
-      hint: 'Send 0.002 USDC on Base to the recipient address and pass the tx hash in the Payment-Signature header.',
-    }, 402);
-  }
-
-  // ─── INPUT VALIDATION ───
   if (!url || typeof url !== 'string') {
     return c.json({
       error: 'Missing required field: url',
@@ -131,51 +118,75 @@ serviceRouter.post('/scrape', async (c) => {
     return c.json({ error: 'URL must use http or https' }, 400);
   }
 
-  // ─── SCRAPE ───
-  try {
-    const result = await scrapePrice(url, { timeoutMs: SCRAPE_TIMEOUT_MS });
-
-    c.header('X-Payment-Settled', 'true');
-    c.header('X-Payment-TxHash', payment.txHash);
-
-    if (!result.snapshot) {
-      return c.json({
-        error: 'Scrape failed',
-        reason: result.error,
-        source: result.source,
-        attempts: result.attempts,
-        http_status: result.http_status,
-        payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
-      }, 502);
-    }
-
-    return c.json({
-      ...result.snapshot,
-      meta: {
-        source: result.source,
-        attempts: result.attempts,
-        used_user_agent: result.used_user_agent,
-        http_status: result.http_status,
-      },
-      payment: {
-        txHash: payment.txHash,
-        network: payment.network,
-        amount: verification.amount,
-        settled: true,
-      },
+  const healed = await withSelfHealing(async (ctx: AttemptContext) => {
+    // Rotate UA on each attempt; the price-monitor accepts a uaIndex hint.
+    const result = await scrapePrice(url, {
+      timeoutMs: SCRAPE_TIMEOUT_MS,
+      singleAttempt: true,
+      uaIndex: ctx.attempt - 1,
     });
-  } catch (err: any) {
+
+    if (result.snapshot) return result;
+
+    // Re-throw as a classified failure so the wrapper knows what to do next.
+    if (result.http_status === 403) {
+      throw new CircuitBreakerError('forbidden_403', `Blocked by upstream (HTTP 403) on ${result.source}`);
+    }
+    if (/timeout|timed out/i.test(result.error || '')) {
+      throw new CircuitBreakerError('timeout', result.error || 'Navigation timed out');
+    }
+    // Anything else from the scraper (CAPTCHA / extraction failure) is treated
+    // as a DOM mismatch so the breaker triggers the fallback-selector path.
+    throw new CircuitBreakerError(
+      'dom_mismatch',
+      result.error || 'Could not extract product data',
+    );
+  }, {
+    maxAttempts: 3,
+    proxyRotateMs: 30_000,
+    onDomMismatch: (snippet, attempt) => {
+      console.warn(`[scrape] DOM mismatch on attempt ${attempt}; HTML head: ${snippet.slice(0, 400)}`);
+    },
+  });
+
+  if (!healed.ok || !healed.value) {
     return c.json({
-      error: 'Scrape failed',
-      message: err?.message || String(err),
-    }, 502);
+      error: 'Scrape failed after self-healing retries',
+      reason: healed.error,
+      attempts: healed.attempts,
+      failures: healed.failures,
+      settled: true,
+    }, 500);
   }
+
+  const result = healed.value;
+  return c.json({
+    ...result.snapshot,
+    meta: {
+      source: result.source,
+      attempts: healed.attempts,
+      circuitBreakerFailures: healed.failures,
+      used_user_agent: result.used_user_agent,
+      http_status: result.http_status,
+    },
+    payment: {
+      network: 'base',
+      amount: SCRAPE_PRICE_USDC,
+      asset: 'USDC',
+      facilitator: 'coinbase-managed',
+      settled: true,
+    },
+  });
 });
 
-// Convenience: GET /scrape returns the 402 challenge (useful for clients to discover pricing).
+// Convenience: GET /scrape returns the 402 challenge (also produced by the
+// x402 middleware on POST without payment, but useful for quick discovery).
 serviceRouter.get('/scrape', (c) => {
-  const baseRecipient = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS || '';
-  if (!baseRecipient) return c.json({ error: 'Service misconfigured' }, 500);
+  const baseRecipient =
+    process.env.USDC_RECEIVER_ADDRESS ||
+    process.env.WALLET_ADDRESS_BASE ||
+    process.env.WALLET_ADDRESS || '';
+  if (!baseRecipient) return c.json({ error: 'Service misconfigured: USDC_RECEIVER_ADDRESS not set' }, 500);
   c.header('X-Payment-Required', `network=base; amount=${SCRAPE_PRICE_USDC}; asset=USDC; payTo=${baseRecipient}`);
   return c.json(build402BaseOnly('/api/scrape', SCRAPE_DESCRIPTION, SCRAPE_PRICE_USDC), 402);
 });

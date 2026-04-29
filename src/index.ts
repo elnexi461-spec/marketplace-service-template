@@ -1,13 +1,25 @@
 /**
- * Marketplace Service — Server Entry Point
- * ─────────────────────────────────────────
- * Mounts: /api/*
+ * EL-BADOO Premium 4G Scraping Hub — Server Entry
+ * ────────────────────────────────────────────────
+ * Hono + Bun, gated by Coinbase x402 (Managed Facilitator) at $0.05 USDC/Base.
+ *
+ * Pipeline:
+ *   1. Security headers + CORS + rate limit  (this file)
+ *   2. x402 paywall on POST /api/scrape       (src/x402-config.ts)
+ *   3. Self-healing scrape pipeline           (src/self-healing.ts)
+ *   4. Discovery extension for the Bazaar     (src/discovery.ts)
+ *
+ * All other endpoints (Maps / SERP / Reviews / LinkedIn / Reddit / IG / Airbnb / …)
+ * remain mounted from src/service.ts unchanged.
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+
 import { serviceRouter } from './service';
+import { buildPaywall, getReceiver, X402_PRICE_USD, X402_NETWORK } from './x402-config';
+import { declareDiscoveryExtension } from './discovery';
 
 const app = new Hono();
 
@@ -17,8 +29,19 @@ app.use('*', logger());
 
 app.use('*', cors({
   origin: '*',
-  allowHeaders: ['Content-Type', 'Payment-Signature', 'X-Payment-Signature', 'X-Payment-Network'],
-  exposeHeaders: ['X-Payment-Settled', 'X-Payment-TxHash', 'Retry-After'],
+  allowHeaders: [
+    'Content-Type',
+    'Payment-Signature',
+    'X-Payment-Signature',
+    'X-Payment-Network',
+    'X-PAYMENT',
+  ],
+  exposeHeaders: [
+    'X-Payment-Settled',
+    'X-Payment-TxHash',
+    'X-PAYMENT-RESPONSE',
+    'Retry-After',
+  ],
 }));
 
 // Security headers
@@ -29,15 +52,14 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'no-referrer');
 });
 
-// Rate limiting (in-memory, per IP, resets every minute)
+// In-memory rate limit (per IP, per minute).
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT = parseInt(process.env.RATE_LIMIT || '60'); // requests per minute
+const RATE_LIMIT = parseInt(process.env.RATE_LIMIT || '60');
 
 app.use('*', async (c, next) => {
   const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const now = Date.now();
   const entry = rateLimits.get(ip);
-
   if (!entry || now > entry.resetAt) {
     rateLimits.set(ip, { count: 1, resetAt: now + 60_000 });
   } else {
@@ -47,11 +69,9 @@ app.use('*', async (c, next) => {
       return c.json({ error: 'Rate limit exceeded', retryAfter: 60 }, 429);
     }
   }
-
   await next();
 });
 
-// Clean up rate limit map every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of rateLimits) {
@@ -59,133 +79,103 @@ setInterval(() => {
   }
 }, 300_000);
 
+// ─── x402 PAYWALL (Coinbase Managed Facilitator) ────
+// Mount BEFORE serviceRouter so it intercepts /api/scrape.
+let paywallReady = false;
+try {
+  app.use(buildPaywall());
+  paywallReady = true;
+  console.log(
+    `[x402] paywall active — ${X402_PRICE_USD} USDC on ${X402_NETWORK} → ${getReceiver()}`,
+  );
+} catch (err: any) {
+  console.error(
+    `[x402] paywall NOT mounted: ${err.message}\n` +
+    '       Set USDC_RECEIVER_ADDRESS, CDP_API_KEY_NAME, CDP_API_KEY_PRIVATE_KEY in Replit Secrets.',
+  );
+}
+
 // ─── ROUTES ─────────────────────────────────────────
 
 app.get('/health', (c) => c.json({
   status: 'healthy',
-  service: process.env.SERVICE_NAME || 'marketplace-service',
-  version: '2.0.0',
+  service: 'EL-BADOO Premium 4G Scraping Hub',
+  version: '3.0.0',
+  paywall: paywallReady ? 'active' : 'misconfigured',
+  facilitator: 'coinbase-managed',
   timestamp: new Date().toISOString(),
-  endpoints: [
-    '/api/scrape',
-    '/api/run',
-    '/api/details',
-    '/api/serp',
-    '/api/jobs',
-    '/api/reviews/search',
-    '/api/reviews/:place_id',
-    '/api/reviews/summary/:place_id',
-    '/api/business/:place_id',
-    '/api/linkedin/person',
-    '/api/linkedin/company',
-    '/api/linkedin/search/people',
-    '/api/linkedin/company/:id/employees',
-    '/api/reddit/search',
-    '/api/reddit/trending',
-    '/api/reddit/subreddit/:name',
-    '/api/reddit/thread/*',
-    '/api/instagram/profile/:username',
-    '/api/instagram/posts/:username',
-    '/api/instagram/analyze/:username',
-    '/api/instagram/analyze/:username/images',
-    '/api/instagram/audit/:username',
-    '/api/airbnb/search',
-    '/api/airbnb/listing/:id',
-    '/api/airbnb/reviews/:listing_id',
-    '/api/airbnb/market-stats',
-    '/api/research',
-    '/api/trending',
-  ],
 }));
 
-// ─── WALLET CONFIG (strict — env-only, no demo fallbacks) ───
-function getRecipients() {
-  const solana = process.env.SOLANA_WALLET_ADDRESS;
-  const base = process.env.WALLET_ADDRESS_BASE || process.env.WALLET_ADDRESS;
-  if (!solana || !base) {
-    throw new Error('SOLANA_WALLET_ADDRESS and WALLET_ADDRESS_BASE (or WALLET_ADDRESS) env vars must be set');
+/**
+ * x402 Discovery — published at /.well-known/x402 so the Coinbase Bazaar
+ * and other agent indexers can find and list this service.
+ */
+app.get('/.well-known/x402', (c) => {
+  try {
+    return c.json({
+      x402Version: 2,
+      discovery: declareDiscoveryExtension({
+        baseUrl: `${c.req.header('x-forwarded-proto') || 'https'}://${c.req.header('host')}`,
+      }),
+    });
+  } catch (err: any) {
+    return c.json({ error: 'Discovery unavailable', reason: err.message }, 503);
   }
-  return { solana, base };
-}
+});
 
 app.get('/', (c) => {
-  let recipients: { solana: string; base: string };
-  try { recipients = getRecipients(); } catch (err: any) {
-    return c.json({ error: 'Service misconfigured', reason: err.message }, 500);
-  }
+  let discovery: ReturnType<typeof declareDiscoveryExtension> | null = null;
+  try {
+    discovery = declareDiscoveryExtension({
+      baseUrl: `${c.req.header('x-forwarded-proto') || 'https'}://${c.req.header('host')}`,
+    });
+  } catch { /* discovery unavailable until receiver is set */ }
+
   return c.json({
-  name: process.env.SERVICE_NAME || 'marketplace-service-hub',
-  description: process.env.SERVICE_DESCRIPTION || 'AI agent intelligence services powered by real 4G/5G mobile proxies.',
-  version: '2.0.0',
-  endpoints: [
-    { method: 'POST', path: '/api/scrape', description: 'E-Commerce Price & Stock Monitor — Amazon/eBay/generic product pages', price: '0.002 USDC (Base)' },
-    { method: 'GET', path: '/api/run', description: 'Google Maps Lead Generator — search businesses by category + location', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/details', description: 'Google Maps Place Details — detailed business info by Place ID', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/serp', description: 'Mobile SERP Scraper — Google organic results (title, link, snippet) via Playwright + iPhone 14 stealth', price: '0.003 USDC (Base)' },
-    { method: 'GET', path: '/api/jobs', description: 'Get job listings (Indeed/LinkedIn) with salary + date + proxy metadata' },
-    { method: 'GET', path: '/api/reviews/search', description: 'Search businesses by query + location', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/reviews/:place_id', description: 'Fetch Google reviews by Place ID', price: '0.02 USDC' },
-    { method: 'GET', path: '/api/business/:place_id', description: 'Get business details + review summary', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/reviews/summary/:place_id', description: 'Get review summary stats', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/linkedin/person', description: 'LinkedIn person profile enrichment', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/linkedin/company', description: 'LinkedIn company profile enrichment', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/linkedin/search/people', description: 'Search LinkedIn people by keywords', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/linkedin/company/:id/employees', description: 'Find company employees by title', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/reddit/search', description: 'Search Reddit posts by keyword', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/reddit/trending', description: 'Get trending Reddit posts', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/reddit/subreddit/:name', description: 'Browse subreddit posts', price: '0.005 USDC' },
-    { method: 'GET', path: '/api/reddit/thread/*', description: 'Fetch post comments', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/instagram/profile/:username', description: 'Instagram profile data', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/instagram/posts/:username', description: 'Recent Instagram posts', price: '0.02 USDC' },
-    { method: 'GET', path: '/api/instagram/analyze/:username', description: 'Full Instagram analysis with AI vision', price: '0.15 USDC' },
-    { method: 'GET', path: '/api/instagram/analyze/:username/images', description: 'AI vision analysis of Instagram images', price: '0.08 USDC' },
-    { method: 'GET', path: '/api/instagram/audit/:username', description: 'Instagram authenticity audit', price: '0.05 USDC' },
-    { method: 'GET', path: '/api/airbnb/search', description: 'Search Airbnb listings by location', price: '0.02 USDC' },
-    { method: 'GET', path: '/api/airbnb/listing/:id', description: 'Get detailed Airbnb listing', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/airbnb/reviews/:listing_id', description: 'Get Airbnb listing reviews', price: '0.01 USDC' },
-    { method: 'GET', path: '/api/airbnb/market-stats', description: 'Airbnb market statistics', price: '0.05 USDC' },
-    { method: 'GET', path: '/api/research', description: 'Multi-source research aggregation', price: '0.05 USDC' },
-    { method: 'GET', path: '/api/trending', description: 'Trending topics intelligence', price: '0.01 USDC' },
-  ],
-  pricing: {
-    amount: process.env.PRICE_USDC || '0.005',
-    currency: 'USDC',
-    networks: [
-      {
-        network: 'solana',
-        chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-        recipient: recipients.solana,
-        asset: 'USDC',
-        assetAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-        settlementTime: '~400ms',
+    name: 'EL-BADOO Premium 4G Scraping Hub',
+    description:
+      'High-trust, mobile-first lead enrichment via authentic Nigerian 4G cluster. 30s IP rotation enabled.',
+    version: '3.0.0',
+    paywall: {
+      active: paywallReady,
+      price: X402_PRICE_USD,
+      currency: 'USDC',
+      network: X402_NETWORK,
+      facilitator: 'coinbase-managed',
+      gatedRoutes: ['POST /api/scrape'],
+    },
+    selfHealing: {
+      enabled: true,
+      maxAttempts: 3,
+      strategies: {
+        '403': '30s wait for 4G mobile IP rotation, then retry',
+        timeout: 'linear backoff retry',
+        domMismatch: 'fallback selector + HTML structure log, retry',
       },
-      {
-        network: 'base',
-        chainId: 'eip155:8453',
-        recipient: recipients.base,
-        asset: 'USDC',
-        assetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-        settlementTime: '~2s',
-      },
-    ],
-  },
-  infrastructure: 'Proxies.sx mobile proxies (real 4G/5G IPs)',
-  links: {
-    marketplace: 'https://agents.proxies.sx/marketplace/',
-    skillFile: 'https://agents.proxies.sx/marketplace/skill.md',
-    github: 'https://github.com/bolivian-peru/marketplace-service-template',
-  },
-});
+    },
+    discovery,
+    links: {
+      health: '/health',
+      x402Discovery: '/.well-known/x402',
+      api: '/api/*',
+    },
+  });
 });
 
 app.route('/api', serviceRouter);
 
-app.notFound((c) => c.json({ error: 'Not found', endpoints: ['/', '/health', '/api/run', '/api/details', '/api/serp', '/api/jobs', '/api/reviews/search', '/api/reviews/:place_id', '/api/business/:place_id', '/api/reviews/summary/:place_id', '/api/linkedin/person', '/api/linkedin/company', '/api/linkedin/search/people', '/api/reddit/search', '/api/reddit/trending', '/api/reddit/subreddit/:name', '/api/reddit/thread/*', '/api/instagram/profile/:username', '/api/instagram/posts/:username', '/api/instagram/analyze/:username', '/api/instagram/audit/:username', '/api/airbnb/search', '/api/airbnb/listing/:id', '/api/airbnb/reviews/:listing_id', '/api/airbnb/market-stats', '/api/research', '/api/trending'] }, 404));
+app.notFound((c) => c.json({
+  error: 'Not found',
+  hint: 'See / for the service catalog and /.well-known/x402 for discovery metadata.',
+}, 404));
 
 app.onError((err, c) => {
   console.error(`[ERROR] ${err.message}`);
   return c.json({ error: 'Internal server error' }, 500);
 });
+
+// ─── DISCOVERY EXPORT (for Bazaar indexers / static tooling) ───
+export { declareDiscoveryExtension } from './discovery';
 
 export default {
   port: parseInt(process.env.PORT || '3000'),
