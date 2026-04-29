@@ -18,6 +18,24 @@ Configured in `src/x402-config.ts`:
 - Mounts `paymentMiddleware` from `x402-hono` on `POST /api/scrape` at **$0.05 USDC on Base**.
 - Falls back to the public `x402.org/facilitator` (testnet) if CDP creds are missing.
 
+## Runtime Resilience (`src/scraper-watchdog.ts`)
+
+A per-scraper circuit-breaker registry sits in front of every scraper call site
+in `src/service.ts` (~26 endpoints, all wrapped via `safeScrape(name, fn)`).
+When a scraper fails 5 times in a row (DOM change, target outage, etc.) the
+breaker opens for 60 s; subsequent requests get a **503 + `Retry-After`** from
+the global `onError` handler instead of crashing the worker. After cooldown
+the breaker enters `half-open` and one trial call is allowed; success closes
+the breaker, failure re-opens it.
+
+Operational endpoints:
+- `GET /health` → includes `scrapers: { total, open, halfOpen, closed }`
+- `GET /health/scrapers` → full breaker registry snapshot
+- `POST /admin/scrapers/:name/reset` → manual breaker reset
+
+Crash safety: `process.on('uncaughtException' | 'unhandledRejection')` logs
+the error and keeps the worker alive instead of exiting.
+
 ## Self-Healing Engine (`src/self-healing.ts`)
 `withSelfHealing(op, options)` wraps any scraping operation with an **error-recovery circuit breaker**:
 - **403 Forbidden** → 30-second wait for the 4G mobile IP to rotate, then retry.

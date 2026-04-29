@@ -59,9 +59,11 @@ const MOBILE_VIEWPORTS = [
 // ─── BROWSER POOL (singleton) ───────────────────────
 
 let _browser: Browser | null = null;
+let _launching: Promise<Browser> | null = null;
+let _launchFailures = 0;
+const MAX_LAUNCH_FAILURES = 3;
 
-async function getBrowser(): Promise<Browser> {
-  if (_browser && _browser.isConnected()) return _browser;
+async function launchBrowser(): Promise<Browser> {
   const executablePath = process.env.REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined;
   const browser = await stealthChromium.launch({
     headless: true,
@@ -78,8 +80,44 @@ async function getBrowser(): Promise<Browser> {
       '--disable-background-networking',
     ],
   });
-  _browser = browser;
+  // Auto-recover when the browser process crashes — next getBrowser() call
+  // will see _browser === null and relaunch.
+  browser.on('disconnected', () => {
+    if (_browser === browser) {
+      console.warn('[price-monitor] Chromium disconnected — pool will relaunch on next request');
+      _browser = null;
+    }
+  });
   return browser;
+}
+
+async function getBrowser(): Promise<Browser> {
+  if (_browser && _browser.isConnected()) return _browser;
+  // De-dupe concurrent launches — important on cold start / after a crash.
+  if (_launching) return _launching;
+
+  _launching = (async () => {
+    try {
+      const browser = await launchBrowser();
+      _browser = browser;
+      _launchFailures = 0;
+      return browser;
+    } catch (err: any) {
+      _launchFailures++;
+      console.error(
+        `[price-monitor] Chromium launch failed (${_launchFailures}/${MAX_LAUNCH_FAILURES}): ${err?.message || err}`,
+      );
+      if (_launchFailures >= MAX_LAUNCH_FAILURES) {
+        // Brief cooldown before allowing more attempts so we don't thrash.
+        setTimeout(() => { _launchFailures = 0; }, 30_000);
+      }
+      throw err;
+    } finally {
+      _launching = null;
+    }
+  })();
+
+  return _launching;
 }
 
 export async function closeBrowser(): Promise<void> {

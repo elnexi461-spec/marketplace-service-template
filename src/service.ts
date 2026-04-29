@@ -31,6 +31,7 @@ import { getProfile, getPosts, analyzeProfile, analyzeImages, auditProfile } fro
 import { searchReddit, getSubreddit, getTrending, getComments } from './scrapers/reddit-scraper';
 import { scrapePrice } from './scrapers/price-monitor';
 import { withSelfHealing, CircuitBreakerError, type AttemptContext } from './self-healing';
+import { safeScrape, ScraperUnavailableError } from './scraper-watchdog';
 
 export const serviceRouter = new Hono();
 
@@ -39,6 +40,21 @@ export const serviceRouter = new Hono();
 // middleware; this constant only powers the discovery / 402-preview helpers.
 const SCRAPE_PRICE_USDC = parseFloat(process.env.SCRAPE_PRICE_USDC || '0.05');
 const SCRAPE_DESCRIPTION = 'EL-BADOO Premium 4G Scraping Hub — high-trust mobile-first product scrape (Amazon / eBay / generic) with self-healing 4G IP rotation.';
+
+/**
+ * Receiver address used by the legacy per-route x402 gates (LinkedIn,
+ * Instagram, Maps, Reddit, Airbnb, …). Falls back through:
+ *   USDC_RECEIVER_ADDRESS → WALLET_ADDRESS_BASE → WALLET_ADDRESS
+ * so the same wallet that receives the new x402 paywall payments also
+ * receives payments for the legacy endpoints.
+ */
+function getLegacyReceiver(): string | undefined {
+  return (
+    process.env.USDC_RECEIVER_ADDRESS ||
+    process.env.WALLET_ADDRESS_BASE ||
+    process.env.WALLET_ADDRESS
+  );
+}
 const SCRAPE_TIMEOUT_MS = parseInt(process.env.SCRAPE_TIMEOUT_MS || '5000');
 const SCRAPE_OUTPUT_SCHEMA = {
   input: { url: 'string — full product page URL (Amazon, eBay, or generic product page)' },
@@ -249,7 +265,7 @@ async function getProxyExitIp(): Promise<string | null> {
 }
 
 serviceRouter.get('/run', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -311,7 +327,7 @@ serviceRouter.get('/run', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await scrapeGoogleMaps(query, location, limit, startIndex);
+    const result = await safeScrape('google-maps', () => scrapeGoogleMaps(query, location, limit, startIndex));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -326,7 +342,7 @@ serviceRouter.get('/run', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({
       error: 'Service execution failed',
       message: err.message,
@@ -336,7 +352,7 @@ serviceRouter.get('/run', async (c) => {
 });
 
 serviceRouter.get('/details', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -396,7 +412,7 @@ serviceRouter.get('/details', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({
       error: 'Failed to fetch business details',
       message: err.message,
@@ -406,7 +422,7 @@ serviceRouter.get('/details', async (c) => {
 });
 
 serviceRouter.get('/jobs', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -453,14 +469,14 @@ serviceRouter.get('/jobs', async (c) => {
     let results: JobListing[] = [];
     if (platform === 'both') {
       const [a, b] = await Promise.all([
-        scrapeIndeed(query, location, limit),
-        scrapeLinkedIn(query, location, limit),
+        safeScrape('indeed', () => scrapeIndeed(query, location, limit)),
+        safeScrape('linkedin-jobs', () => scrapeLinkedIn(query, location, limit)),
       ]);
       results = [...a, ...b];
     } else if (platform === 'linkedin') {
-      results = await scrapeLinkedIn(query, location, limit);
+      results = await safeScrape('linkedin-jobs', () => scrapeLinkedIn(query, location, limit));
     } else {
-      results = await scrapeIndeed(query, location, limit);
+      results = await safeScrape('indeed', () => scrapeIndeed(query, location, limit));
     }
 
     c.header('X-Payment-Settled', 'true');
@@ -485,7 +501,7 @@ serviceRouter.get('/jobs', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Scrape failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -523,7 +539,7 @@ setInterval(() => {
 // ─── GET /api/reviews/search ────────────────────────
 
 serviceRouter.get('/reviews/search', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -552,7 +568,7 @@ serviceRouter.get('/reviews/search', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await searchBusinesses(query, location, limit);
+    const result = await safeScrape('reviews-search', () => searchBusinesses(query, location, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -562,7 +578,7 @@ serviceRouter.get('/reviews/search', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -570,7 +586,7 @@ serviceRouter.get('/reviews/search', async (c) => {
 // ─── GET /api/reviews/summary/:place_id ─────────────
 
 serviceRouter.get('/reviews/summary/:place_id', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -595,7 +611,7 @@ serviceRouter.get('/reviews/summary/:place_id', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await fetchReviewSummary(placeId);
+    const result = await safeScrape('reviews-summary', () => fetchReviewSummary(placeId));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -605,7 +621,7 @@ serviceRouter.get('/reviews/summary/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Summary fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -613,7 +629,7 @@ serviceRouter.get('/reviews/summary/:place_id', async (c) => {
 // ─── GET /api/reviews/:place_id ─────────────────────
 
 serviceRouter.get('/reviews/:place_id', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -649,7 +665,7 @@ serviceRouter.get('/reviews/:place_id', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await fetchReviews(placeId, sort, limit);
+    const result = await safeScrape('reviews', () => fetchReviews(placeId, sort, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -659,7 +675,7 @@ serviceRouter.get('/reviews/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Reviews fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -667,7 +683,7 @@ serviceRouter.get('/reviews/:place_id', async (c) => {
 // ─── GET /api/business/:place_id ────────────────────
 
 serviceRouter.get('/business/:place_id', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -695,7 +711,7 @@ serviceRouter.get('/business/:place_id', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await fetchBusinessDetails(placeId);
+    const result = await safeScrape('business-details', () => fetchBusinessDetails(placeId));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -705,7 +721,7 @@ serviceRouter.get('/business/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Business details fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -720,7 +736,7 @@ const LINKEDIN_SEARCH_PRICE_USDC = 0.10;    // $0.10 per search query
 
 // ─── GET /api/linkedin/person ────────────────────────
 serviceRouter.get('/linkedin/person', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -754,7 +770,7 @@ serviceRouter.get('/linkedin/person', async (c) => {
 
   try {
     const proxy = getProxy();
-    const person = await scrapeLinkedInPerson(publicIdMatch[1]);
+    const person = await safeScrape('linkedin-person', () => scrapeLinkedInPerson(publicIdMatch[1]));
 
     if (!person) {
       return c.json({ error: 'Failed to scrape profile. Profile may be private or LinkedIn blocked the request.' }, 502);
@@ -775,14 +791,14 @@ serviceRouter.get('/linkedin/person', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Profile fetch failed', message: err?.message || String(err) }, 502);
   }
 });
 
 // ─── GET /api/linkedin/company ────────────────────────
 serviceRouter.get('/linkedin/company', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -815,7 +831,7 @@ serviceRouter.get('/linkedin/company', async (c) => {
 
   try {
     const proxy = getProxy();
-    const company = await scrapeLinkedInCompany(companyIdMatch[1]);
+    const company = await safeScrape('linkedin-company', () => scrapeLinkedInCompany(companyIdMatch[1]));
 
     if (!company) {
       return c.json({ error: 'Failed to scrape company. Company may not exist or LinkedIn blocked the request.' }, 502);
@@ -836,14 +852,14 @@ serviceRouter.get('/linkedin/company', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Company fetch failed', message: err?.message || String(err) }, 502);
   }
 });
 
 // ─── GET /api/linkedin/search/people ────────────────────────
 serviceRouter.get('/linkedin/search/people', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -880,7 +896,7 @@ serviceRouter.get('/linkedin/search/people', async (c) => {
 
   try {
     const proxy = getProxy();
-    const results = await searchLinkedInPeople(title, location || undefined, industry || undefined, limit);
+    const results = await safeScrape('linkedin-search', () => searchLinkedInPeople(title, location || undefined, industry || undefined, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -895,14 +911,14 @@ serviceRouter.get('/linkedin/search/people', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Search failed', message: err?.message || String(err) }, 502);
   }
 });
 
 // ─── GET /api/linkedin/company/:id/employees ────────────────────────
 serviceRouter.get('/linkedin/company/:id/employees', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) {
     return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
   }
@@ -937,7 +953,7 @@ serviceRouter.get('/linkedin/company/:id/employees', async (c) => {
 
   try {
     const proxy = getProxy();
-    const results = await findCompanyEmployees(companyId, title, limit);
+    const results = await safeScrape('linkedin-employees', () => findCompanyEmployees(companyId, title, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -952,7 +968,7 @@ serviceRouter.get('/linkedin/company/:id/employees', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Employee search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1001,7 +1017,7 @@ serviceRouter.get('/reddit/search', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const result = await searchReddit(query, sort, time, limit, after);
+    const result = await safeScrape('reddit-search', () => searchReddit(query, sort, time, limit, after));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1014,7 +1030,7 @@ serviceRouter.get('/reddit/search', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Reddit search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1044,7 +1060,7 @@ serviceRouter.get('/reddit/trending', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const result = await getTrending(limit);
+    const result = await safeScrape('reddit-trending', () => getTrending(limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1057,7 +1073,7 @@ serviceRouter.get('/reddit/trending', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Reddit trending fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1099,7 +1115,7 @@ serviceRouter.get('/reddit/subreddit/:name', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const result = await getSubreddit(name, sort, time, limit, after);
+    const result = await safeScrape('reddit-subreddit', () => getSubreddit(name, sort, time, limit, after));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1112,7 +1128,7 @@ serviceRouter.get('/reddit/subreddit/:name', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Subreddit fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1153,7 +1169,7 @@ serviceRouter.get('/reddit/thread/*', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const result = await getComments(permalink, sort, limit);
+    const result = await safeScrape('reddit-comments', () => getComments(permalink, sort, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1166,7 +1182,7 @@ serviceRouter.get('/reddit/thread/*', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Comment fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1184,7 +1200,7 @@ const IG_AUDIT_PRICE    = 0.05;   // $0.05 per authenticity audit
 // ─── GET /api/instagram/profile/:username ───────────
 
 serviceRouter.get('/instagram/profile/:username', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -1211,7 +1227,7 @@ serviceRouter.get('/instagram/profile/:username', async (c) => {
 
   try {
     const proxy = getProxy();
-    const profile = await getProfile(username);
+    const profile = await safeScrape('instagram-profile', () => getProfile(username));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1221,7 +1237,7 @@ serviceRouter.get('/instagram/profile/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Instagram profile fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1229,7 +1245,7 @@ serviceRouter.get('/instagram/profile/:username', async (c) => {
 // ─── GET /api/instagram/posts/:username ─────────────
 
 serviceRouter.get('/instagram/posts/:username', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -1261,7 +1277,7 @@ serviceRouter.get('/instagram/posts/:username', async (c) => {
 
   try {
     const proxy = getProxy();
-    const posts = await getPosts(username, limit);
+    const posts = await safeScrape('instagram-posts', () => getPosts(username, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1271,7 +1287,7 @@ serviceRouter.get('/instagram/posts/:username', async (c) => {
       meta: { username, count: posts.length, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Instagram posts fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1279,7 +1295,7 @@ serviceRouter.get('/instagram/posts/:username', async (c) => {
 // ─── GET /api/instagram/analyze/:username ───────────
 
 serviceRouter.get('/instagram/analyze/:username', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -1308,7 +1324,7 @@ serviceRouter.get('/instagram/analyze/:username', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await analyzeProfile(username);
+    const result = await safeScrape('instagram-analyze', () => analyzeProfile(username));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1318,7 +1334,7 @@ serviceRouter.get('/instagram/analyze/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Instagram analysis failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1326,7 +1342,7 @@ serviceRouter.get('/instagram/analyze/:username', async (c) => {
 // ─── GET /api/instagram/analyze/:username/images ────
 
 serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -1354,7 +1370,7 @@ serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await analyzeImages(username);
+    const result = await safeScrape('instagram-images', () => analyzeImages(username));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1364,7 +1380,7 @@ serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
       meta: { username, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Instagram image analysis failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1372,7 +1388,7 @@ serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
 // ─── GET /api/instagram/audit/:username ─────────────
 
 serviceRouter.get('/instagram/audit/:username', async (c) => {
-  const walletAddress = process.env.WALLET_ADDRESS;
+  const walletAddress = getLegacyReceiver();
   if (!walletAddress) return c.json({ error: 'Service misconfigured: WALLET_ADDRESS not set' }, 500);
 
   const payment = extractPayment(c);
@@ -1400,7 +1416,7 @@ serviceRouter.get('/instagram/audit/:username', async (c) => {
 
   try {
     const proxy = getProxy();
-    const result = await auditProfile(username);
+    const result = await safeScrape('instagram-audit', () => auditProfile(username));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1410,7 +1426,7 @@ serviceRouter.get('/instagram/audit/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Instagram audit failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1460,7 +1476,7 @@ serviceRouter.get('/airbnb/search', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const results = await searchAirbnb(location, checkin, checkout, guests, limit);
+    const results = await safeScrape('airbnb-search', () => searchAirbnb(location, checkin, checkout, guests, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1470,7 +1486,7 @@ serviceRouter.get('/airbnb/search', async (c) => {
       meta: { location, checkin, checkout, guests, count: results.length, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Airbnb search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1500,7 +1516,7 @@ serviceRouter.get('/airbnb/listing/:id', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const listing = await getListingDetail(listingId);
+    const listing = await safeScrape('airbnb-listing', () => getListingDetail(listingId));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1510,7 +1526,7 @@ serviceRouter.get('/airbnb/listing/:id', async (c) => {
       meta: { proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Airbnb listing fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1545,7 +1561,7 @@ serviceRouter.get('/airbnb/reviews/:listing_id', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const reviews = await getListingReviews(listingId, limit);
+    const reviews = await safeScrape('airbnb-reviews', () => getListingReviews(listingId, limit));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1555,7 +1571,7 @@ serviceRouter.get('/airbnb/reviews/:listing_id', async (c) => {
       meta: { listingId, count: reviews.length, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Airbnb reviews fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1592,7 +1608,7 @@ serviceRouter.get('/airbnb/market-stats', async (c) => {
   try {
     const proxy = getProxy();
     const ip = await getProxyExitIp();
-    const stats = await getMarketStats(location, checkin, checkout);
+    const stats = await safeScrape('airbnb-market', () => getMarketStats(location, checkin, checkout));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1602,7 +1618,7 @@ serviceRouter.get('/airbnb/market-stats', async (c) => {
       meta: { location, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'Airbnb market stats failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1666,7 +1682,7 @@ async function handleSerp(c: any) {
 
   // ─── SCRAPE ───
   try {
-    const result = await scrapeSerpMobile(query, { timeoutMs: SERP_TIMEOUT_MS, max, hl, gl });
+    const result = await safeScrape('serp', () => scrapeSerpMobile(query, { timeoutMs: SERP_TIMEOUT_MS, max, hl, gl }));
 
     c.header('X-Payment-Settled', 'true');
     c.header('X-Payment-TxHash', payment.txHash);
@@ -1691,7 +1707,7 @@ async function handleSerp(c: any) {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) {
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
     return c.json({ error: 'SERP scrape failed', message: err?.message || String(err) }, 502);
   }
 }

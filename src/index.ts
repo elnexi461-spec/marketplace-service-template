@@ -20,8 +20,24 @@ import { logger } from 'hono/logger';
 import { serviceRouter } from './service';
 import { buildPaywall, getReceiver, X402_PRICE_USD, X402_NETWORK } from './x402-config';
 import { declareDiscoveryExtension } from './discovery';
+import {
+  getWatchdogSnapshot,
+  resetBreaker,
+  ScraperUnavailableError,
+} from './scraper-watchdog';
 
 const app = new Hono();
+
+// ─── PROCESS-LEVEL CRASH PROTECTION ─────────────────
+// A scraper that throws asynchronously (Playwright Page closed mid-flight,
+// JSON parser blowing up on a 0-byte body, etc.) must NOT take down the
+// whole hub. Log it and keep running.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-guard] uncaughtException:', err?.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-guard] unhandledRejection:', reason);
+});
 
 // ─── MIDDLEWARE ──────────────────────────────────────
 
@@ -97,14 +113,30 @@ try {
 
 // ─── ROUTES ─────────────────────────────────────────
 
-app.get('/health', (c) => c.json({
-  status: 'healthy',
-  service: 'EL-BADOO Premium 4G Scraping Hub',
-  version: '3.0.0',
-  paywall: paywallReady ? 'active' : 'misconfigured',
-  facilitator: 'coinbase-managed',
-  timestamp: new Date().toISOString(),
-}));
+app.get('/health', (c) => {
+  const snap = getWatchdogSnapshot();
+  return c.json({
+    status: snap.summary.open > 0 ? 'degraded' : 'healthy',
+    service: 'EL-BADOO Premium 4G Scraping Hub',
+    version: '3.0.0',
+    paywall: paywallReady ? 'active' : 'misconfigured',
+    facilitator: 'coinbase-managed',
+    scrapers: snap.summary,
+    uptimeSec: Math.round(process.uptime()),
+    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/** Live per-scraper circuit-breaker status. */
+app.get('/health/scrapers', (c) => c.json(getWatchdogSnapshot()));
+
+/** Admin: manually close a circuit breaker after a fix has been deployed. */
+app.post('/admin/scrapers/:name/reset', (c) => {
+  const name = c.req.param('name');
+  const ok = resetBreaker(name);
+  return c.json({ scraper: name, reset: ok }, ok ? 200 : 404);
+});
 
 /**
  * x402 Discovery — published at /.well-known/x402 so the Coinbase Bazaar
@@ -169,9 +201,30 @@ app.notFound((c) => c.json({
   hint: 'See / for the service catalog and /.well-known/x402 for discovery metadata.',
 }, 404));
 
+/**
+ * Global error guard — converts any thrown error into a clean JSON
+ * response. Open circuit breakers become 503s with a Retry-After hint
+ * so clients (and the user's deployment monitor) can back off cleanly.
+ */
 app.onError((err, c) => {
-  console.error(`[ERROR] ${err.message}`);
-  return c.json({ error: 'Internal server error' }, 500);
+  if (err instanceof ScraperUnavailableError) {
+    const seconds = Math.max(1, Math.ceil(err.cooldownMs / 1000));
+    c.header('Retry-After', String(seconds));
+    return c.json({
+      error: 'Scraper temporarily unavailable',
+      scraper: err.scraper,
+      state: err.state,
+      reason: err.reason,
+      retryAfterSeconds: seconds,
+      hint: 'This source is in self-quarantine after repeated failures. The hub will auto-test it again after the cooldown.',
+    }, 503);
+  }
+  console.error(`[ERROR] ${c.req.method} ${c.req.path}: ${err?.stack || err?.message}`);
+  return c.json({
+    error: 'Internal server error',
+    path: c.req.path,
+    message: err?.message || 'Unknown error',
+  }, 500);
 });
 
 // ─── DISCOVERY EXPORT (for Bazaar indexers / static tooling) ───
