@@ -77,6 +77,21 @@ Bound to `0.0.0.0:5000`. Useful endpoints:
 - `GET /.well-known/x402` — discovery extension JSON
 - `POST /api/scrape` — paid endpoint ($0.05 USDC on Base, Coinbase Managed Facilitator)
 
+## Unified Receiver Wallet
+
+All paid endpoints — both the new x402 paywall (`POST /api/scrape`) and the
+legacy per-route gates (LinkedIn / Instagram / Maps / Reviews / Reddit /
+Airbnb / SERP) — settle to the **same USDC-on-Base wallet** resolved from:
+
+```
+USDC_RECEIVER_ADDRESS → WALLET_ADDRESS_BASE → WALLET_ADDRESS
+```
+
+`build402Response` in `src/payment.ts` only advertises networks that actually
+match the wallet's address format (EVM 0x… → Base only; base58 → Solana only)
+so clients cannot accidentally pay on a network that the recipient cannot
+receive on.
+
 ## Required Secrets
 Set in Replit Secrets:
 - `CDP_API_KEY_NAME` — Coinbase Developer Platform key id

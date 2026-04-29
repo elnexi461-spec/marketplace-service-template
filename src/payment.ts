@@ -107,6 +107,34 @@ export function build402Response(
   walletAddress: string,
   outputSchema?: Record<string, any>,
 ) {
+  // Only advertise networks matching the wallet's address format. An EVM
+  // 0x... address cannot receive on Solana, and a base58 Solana wallet
+  // cannot receive on Base — advertising both would be misleading and break
+  // payment verification for clients picking the wrong network.
+  const isEvm = /^0x[a-fA-F0-9]{40}$/.test(walletAddress);
+  const baseRecipient = process.env.WALLET_ADDRESS_BASE || (isEvm ? walletAddress : '');
+  const solanaRecipient = isEvm ? '' : walletAddress;
+
+  const networks: any[] = [];
+  if (baseRecipient) {
+    networks.push({
+      network: 'base',
+      chainId: 'eip155:8453',
+      recipient: baseRecipient,
+      asset: 'USDC',
+      assetAddress: USDC_BASE,
+    });
+  }
+  if (solanaRecipient) {
+    networks.push({
+      network: 'solana',
+      chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+      recipient: solanaRecipient,
+      asset: 'USDC',
+      assetAddress: USDC_SOLANA,
+    });
+  }
+
   return {
     status: 402,
     message: 'Payment required',
@@ -117,24 +145,7 @@ export function build402Response(
       currency: 'USDC',
       minimumAmount: String(priceUSDC),
     },
-    networks: [
-      {
-        network: 'solana',
-        chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-        recipient: walletAddress,
-        asset: 'USDC',
-        assetAddress: USDC_SOLANA,
-      },
-      // Base recipient is REQUIRED — no demo fallback. If WALLET_ADDRESS_BASE
-      // is not set, fall back to WALLET_ADDRESS (must still be configured).
-      {
-        network: 'base',
-        chainId: 'eip155:8453',
-        recipient: process.env.WALLET_ADDRESS_BASE || walletAddress,
-        asset: 'USDC',
-        assetAddress: USDC_BASE,
-      },
-    ],
+    networks,
     headers: {
       required: ['Payment-Signature'],
       optional: ['X-Payment-Network'],
