@@ -102,7 +102,7 @@ try {
   app.use(buildPaywall());
   paywallReady = true;
   console.log(
-    `[x402] paywall active — ${X402_PRICE_USD} USDC on ${X402_NETWORK} → ${getReceiver()}`,
+    `[x402] paywall active — ${X402_PRICE_USD} USDC on ${X402_NETWORK} → ${getReceiver()}\n[scraper] ScraperAPI cloud proxy active (render=true, premium=auto)`,
   );
 } catch (err: any) {
   console.error(

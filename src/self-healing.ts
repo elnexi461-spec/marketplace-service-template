@@ -1,21 +1,24 @@
 /**
- * Self-Healing Engine — Error-Recovery Circuit Breaker
- * ─────────────────────────────────────────────────────
+ * Self-Healing Engine — Cloud-Proxy Edition
+ * ─────────────────────────────────────────
  * Wraps any scraping operation with classified retries:
  *
- *   • 403 Forbidden  →  30s wait for 4G mobile IP rotation, then retry
- *   • Timeout        →  short backoff, then retry
- *   • DOM Mismatch   →  fallback selector hook + HTML structure log, retry
- *   • Other failures →  exponential backoff
+ *   • 403 / 429       →  immediate retry (ScraperAPI auto-rotates IP)
+ *   • Timeout         →  short backoff, then retry
+ *   • DOM Mismatch    →  fallback selector hook, immediate retry
+ *   • Network         →  short backoff, then retry
  *
  * Hard-capped at 3 attempts. After exhausting retries the wrapper
- * returns a settled failure (HTTP 500-style envelope) so the caller can
- * surface the failure to the paying client without crashing the worker
- * or wasting on-chain payment data.
+ * returns a settled failure (HTTP 500-style envelope) so the caller
+ * can surface the failure to the paying client without crashing the
+ * worker or wasting on-chain payment data.
+ *
+ * (The legacy 30-second mobile-IP-rotation wait has been removed —
+ * ScraperAPI provides a fresh exit IP on every request automatically.)
  */
 
 export type FailureKind =
-  | 'forbidden_403'
+  | 'forbidden'        // 403 or 429 — ScraperAPI will auto-rotate IP next call
   | 'timeout'
   | 'dom_mismatch'
   | 'network'
@@ -43,18 +46,13 @@ export interface HealingResult<T> {
 
 export interface HealingOptions {
   maxAttempts?: number;
-  /** Override the 30s mobile-IP-rotation wait (ms). */
-  proxyRotateMs?: number;
   /** Optional logger; defaults to console. */
   logger?: { info: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
   /** Optional sink for HTML structure when a DOM mismatch is detected. */
   onDomMismatch?: (snippet: string, attempt: number) => void;
 }
 
-const DEFAULTS = {
-  maxAttempts: 3,
-  proxyRotateMs: 30_000,
-};
+const DEFAULT_MAX_ATTEMPTS = 3;
 
 export class CircuitBreakerError extends Error {
   kind: FailureKind;
@@ -72,6 +70,7 @@ export class CircuitBreakerError extends Error {
  *
  * Accepts:
  *   • Plain Error instances (matches against message + status property)
+ *   • ScraperApiError (has `status` field)
  *   • { http_status, error } envelopes returned by scrapers
  *   • CircuitBreakerError (preserves its declared kind)
  */
@@ -82,10 +81,10 @@ export function classifyFailure(err: unknown): FailureKind {
   const status: number | undefined = e?.http_status ?? e?.status ?? e?.statusCode;
   const msg: string = String(e?.message ?? e?.error ?? e ?? '').toLowerCase();
 
-  if (status === 403 || /\b403\b|forbidden|access denied|blocked/.test(msg)) {
-    return 'forbidden_403';
+  if (status === 403 || status === 429 || /\b(403|429)\b|forbidden|too many requests|rate limit|access denied|blocked/.test(msg)) {
+    return 'forbidden';
   }
-  if (/timeout|timed out|etimedout|navigation timeout/.test(msg)) {
+  if (/timeout|timed out|etimedout|aborterror|signal is aborted/.test(msg)) {
     return 'timeout';
   }
   if (/dom|selector|extract|captcha|bot wall|could not extract/.test(msg)) {
@@ -103,18 +102,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Recovery delay for a given failure kind. */
-function delayFor(kind: FailureKind, attempt: number, opts: Required<Pick<HealingOptions, 'proxyRotateMs'>>): number {
+function delayFor(kind: FailureKind, attempt: number): number {
   switch (kind) {
-    case 'forbidden_403':
-      return opts.proxyRotateMs;          // wait for mobile IP rotation
-    case 'timeout':
-      return 1_500 * attempt;             // gentle linear backoff
+    case 'forbidden':
+      return 0;                  // ScraperAPI rotates IP automatically — retry now
     case 'dom_mismatch':
-      return 500;                         // immediate fallback retry
+      return 250;                // immediate fallback retry
+    case 'timeout':
+      return 1_500 * attempt;    // gentle linear backoff
     case 'network':
-      return 2_000 * attempt;
-    default:
       return 1_000 * attempt;
+    default:
+      return 750 * attempt;
   }
 }
 
@@ -124,17 +123,15 @@ function delayFor(kind: FailureKind, attempt: number, opts: Required<Pick<Healin
  * The operation receives an AttemptContext on each call so it can:
  *   - know which attempt this is
  *   - swap to a fallback selector path on dom_mismatch
- *   - cooperate with proxy rotation on 403
  *
  * The operation should either return its successful value or throw
- * (Error, CircuitBreakerError, or a `{ http_status, error }` envelope).
+ * (Error, CircuitBreakerError, ScraperApiError, or a `{ http_status, error }` envelope).
  */
 export async function withSelfHealing<T>(
   op: (ctx: AttemptContext) => Promise<T>,
   options: HealingOptions = {},
 ): Promise<HealingResult<T>> {
-  const maxAttempts = options.maxAttempts ?? DEFAULTS.maxAttempts;
-  const proxyRotateMs = options.proxyRotateMs ?? DEFAULTS.proxyRotateMs;
+  const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const log = options.logger ?? console;
 
   const failures: FailureKind[] = [];
@@ -166,9 +163,13 @@ export async function withSelfHealing<T>(
 
       if (attempt >= maxAttempts) break;
 
-      const wait = delayFor(kind, attempt, { proxyRotateMs });
-      log.info(`[self-heal] waiting ${wait}ms before retry (kind=${kind})`);
-      await sleep(wait);
+      const wait = delayFor(kind, attempt);
+      if (wait > 0) {
+        log.info(`[self-heal] waiting ${wait}ms before retry (kind=${kind})`);
+        await sleep(wait);
+      } else {
+        log.info(`[self-heal] retrying immediately (kind=${kind} → ScraperAPI IP rotation)`);
+      }
     }
   }
 

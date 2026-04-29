@@ -82,7 +82,7 @@ export function declareDiscoveryExtension(
       proxyRegion: 'NG',
       ipRotationSeconds: 30,
       runtime: 'bun',
-      browser: 'playwright-core/chromium --single-process',
+      proxy: 'scraperapi-cloud (residential rotation, JS rendering)',
       maxRetries: 3,
       ...input.extra,
     },

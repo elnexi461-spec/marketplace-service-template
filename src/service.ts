@@ -145,8 +145,8 @@ serviceRouter.post('/scrape', async (c) => {
     if (result.snapshot) return result;
 
     // Re-throw as a classified failure so the wrapper knows what to do next.
-    if (result.http_status === 403) {
-      throw new CircuitBreakerError('forbidden_403', `Blocked by upstream (HTTP 403) on ${result.source}`);
+    if (result.http_status === 403 || result.http_status === 429) {
+      throw new CircuitBreakerError('forbidden', `Blocked by upstream (HTTP ${result.http_status}) on ${result.source}`);
     }
     if (/timeout|timed out/i.test(result.error || '')) {
       throw new CircuitBreakerError('timeout', result.error || 'Navigation timed out');
@@ -159,7 +159,6 @@ serviceRouter.post('/scrape', async (c) => {
     );
   }, {
     maxAttempts: 3,
-    proxyRotateMs: 30_000,
     onDomMismatch: (snippet, attempt) => {
       console.warn(`[scrape] DOM mismatch on attempt ${attempt}; HTML head: ${snippet.slice(0, 400)}`);
     },
