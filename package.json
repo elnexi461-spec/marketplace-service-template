@@ -10,10 +10,13 @@
     "proof:indeed": "bun run scripts/proof-indeed.ts"
   },
   "dependencies": {
+    "@coinbase/x402": "^2.1.0",
     "hono": "^4.6.0",
     "playwright": "^1.59.1",
+    "playwright-core": "^1.59.1",
     "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "x402-hono": "^1.2.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
