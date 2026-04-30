@@ -37,6 +37,20 @@ const USDC_DECIMALS_BASE = 6;
 // Track verified tx hashes to prevent replay (in-memory, resets on restart)
 const verifiedTxHashes = new Set<string>();
 
+/**
+ * Release a previously-verified tx hash so it can be reused.
+ *
+ * Used when a paid request fails for an upstream-config reason that the
+ * caller can fix (e.g. PlanRestrictedError on LinkedIn) — the user paid
+ * for nothing through no fault of their own, so we let them retry on
+ * a different endpoint with the same hash.
+ *
+ * Returns true if the hash was actually held and is now released.
+ */
+export function releaseTxHash(txHash: string): boolean {
+  return verifiedTxHashes.delete(txHash);
+}
+
 // ─── PUBLIC API ─────────────────────────────────────
 
 /**

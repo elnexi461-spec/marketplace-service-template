@@ -25,6 +25,8 @@ import {
   resetBreaker,
   ScraperUnavailableError,
 } from './scraper-watchdog';
+import { PlanRestrictedError } from './proxy';
+import { releaseTxHash } from './payment';
 
 const app = new Hono();
 
@@ -219,6 +221,30 @@ app.onError((err, c) => {
       hint: 'This source is in self-quarantine after repeated failures. The hub will auto-test it again after the cooldown.',
     }, 503);
   }
+  if (err instanceof PlanRestrictedError) {
+    // Refund the tx hash — the user paid but we cannot service this host.
+    // They can reuse the same hash on a working endpoint.
+    let refunded = false;
+    const txHash = c.req.header('Payment-Signature') || c.req.header('payment-signature');
+    if (txHash) refunded = releaseTxHash(txHash);
+
+    return c.json({
+      error: 'Upstream plan restriction',
+      host: err.host,
+      reason: err.message,
+      hint: err.hint,
+      txHashReusable: refunded,
+      operationalEndpoints: [
+        'POST /api/scrape (Amazon, eBay, generic product pages)',
+        'GET  /api/run, /api/details (Google Maps)',
+        'GET  /api/jobs (Indeed)',
+        'GET  /api/reviews/* /api/business/* (Google Business)',
+        'GET  /api/reddit/*',
+        'GET  /api/airbnb/*',
+        'GET  /api/serp (Google Search)',
+      ],
+    }, 503);
+  }
   console.error(`[ERROR] ${c.req.method} ${c.req.path}: ${err?.stack || err?.message}`);
   return c.json({
     error: 'Internal server error',
@@ -233,5 +259,9 @@ export { declareDiscoveryExtension } from './discovery';
 export default {
   port: parseInt(process.env.PORT || '3000'),
   hostname: '0.0.0.0',
+  // ScraperAPI rendered fetches can take 25-45s for premium hosts,
+  // and our scrapers chain multiple fetches per request. 120s gives
+  // generous headroom while still cutting off truly stuck connections.
+  idleTimeout: 120,
   fetch: app.fetch,
 };

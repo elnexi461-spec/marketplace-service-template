@@ -1,9 +1,40 @@
 /**
- * Mobile Proxy Helper — Multi-Proxy Pool Rotation
- * ────────────────────────────────────────────────
- * Supports PROXY_LIST env var for multiple proxies with round-robin rotation.
- * Falls back to single proxy from PROXY_HOST/PROXY_HTTP_PORT/PROXY_USER/PROXY_PASS.
+ * ScraperAPI Compatibility Shim
+ * ─────────────────────────────
+ * Drop-in replacement for the legacy mobile-proxy layer. Every existing
+ * caller continues to import { proxyFetch, getProxy, getProxyExitIp } from
+ * './proxy' — but under the hood we route through ScraperAPI's cloud
+ * (residential rotation + JS render + CAPTCHA) instead of a self-managed
+ * 4G proxy fleet. Zero changes required in scraper modules.
+ *
+ * Public API kept stable:
+ *   • proxyFetch(url, opts)    → Response (status, ok, text(), json())
+ *   • getProxy()               → ProxyConfig { url, host, port, country, ... }
+ *   • getProxyExitIp()         → string (rotates per request — synthetic label)
  */
+
+import { fetchHTML, needsPremium, ScraperApiError } from './scrapers/scraperapi';
+
+/**
+ * Thrown when ScraperAPI rejects a request because the current plan
+ * doesn't grant access to that target host (LinkedIn, Instagram, etc.
+ * require their "Business" tier). Handlers should translate this into
+ * an HTTP 503 with a clear, actionable message instead of a generic 502.
+ */
+export class PlanRestrictedError extends Error {
+  host: string;
+  hint: string;
+  constructor(host: string) {
+    super(`ScraperAPI plan does not include access to ${host}`);
+    this.name = 'PlanRestrictedError';
+    this.host = host;
+    this.hint =
+      `Upgrade the ScraperAPI plan (Business tier or higher) to enable ${host} scraping. ` +
+      `Other targets — Amazon, Reddit, Airbnb, Indeed, Google, generic web — work on the current plan.`;
+  }
+}
+
+const PREMIUM_ONLY_HOSTS = /linkedin\.com|instagram\.com/i;
 
 export interface ProxyConfig {
   url: string;
@@ -17,139 +48,125 @@ export interface ProxyConfig {
 export interface ProxyFetchOptions extends RequestInit {
   maxRetries?: number;
   timeoutMs?: number;
+  /** Force JS rendering. Default: true (matches ScraperAPI helper). */
+  render?: boolean;
+  /** Force ScraperAPI premium residential pool. Default: auto-detect by host. */
+  premium?: boolean;
+  /** ISO-3166 country for geo-targeted exit IPs. */
+  country?: string;
 }
 
-// ─── PROXY POOL ──────────────────────────────────────
+// ─── SYNTHETIC PROXY METADATA ───────────────────────
+// ScraperAPI rotates IPs per request and exposes no single host:port,
+// so getProxy() returns a stable descriptor that callers can log/display
+// without crashing. Nothing in the codebase actually dials this URL.
 
-let proxyPool: ProxyConfig[] | null = null;
-let proxyIndex = 0;
+const SYNTHETIC_PROXY: ProxyConfig = Object.freeze({
+  url: 'https://api.scraperapi.com',
+  host: 'api.scraperapi.com',
+  port: 443,
+  user: 'scraperapi',
+  pass: '<rotating>',
+  country: process.env.SCRAPERAPI_COUNTRY || 'US',
+});
 
-function initPool(): ProxyConfig[] {
-  if (proxyPool) return proxyPool;
-
-  const list = process.env.PROXY_LIST;
-  if (list) {
-    proxyPool = list.split(';').filter(Boolean).map(entry => {
-      const [host, port, user, pass, country] = entry.split(':');
-      return {
-        url: `http://${user}:${pass}@${host}:${port}`,
-        host,
-        port: parseInt(port),
-        user,
-        pass,
-        country: country || 'US',
-      };
-    });
-    console.log(`[PROXY] Loaded ${proxyPool.length} proxies from PROXY_LIST`);
-    return proxyPool;
-  }
-
-  // Fallback to single proxy
-  const host = process.env.PROXY_HOST;
-  const port = process.env.PROXY_HTTP_PORT;
-  const user = process.env.PROXY_USER;
-  const pass = process.env.PROXY_PASS;
-
-  if (!host || !port || !user || !pass) {
-    throw new Error(
-      'Proxy not configured. Set PROXY_LIST or PROXY_HOST/PROXY_HTTP_PORT/PROXY_USER/PROXY_PASS in .env.'
-    );
-  }
-
-  proxyPool = [{
-    url: `http://${user}:${pass}@${host}:${port}`,
-    host,
-    port: parseInt(port),
-    user,
-    pass,
-    country: process.env.PROXY_COUNTRY || 'US',
-  }];
-  return proxyPool;
-}
-
-/**
- * Get next proxy from pool (round-robin)
- */
 export function getProxy(): ProxyConfig {
-  const pool = initPool();
-  const proxy = pool[proxyIndex % pool.length];
-  proxyIndex++;
-  return proxy;
+  // Same shape every time — ScraperAPI handles rotation server-side.
+  return SYNTHETIC_PROXY;
+}
+
+export async function getProxyExitIp(): Promise<string> {
+  // ScraperAPI rotates per request; no single exit IP exists. Return a
+  // descriptive label so log lines and response metadata stay readable.
+  return 'scraperapi-rotating';
+}
+
+// ─── FETCH (Response-compatible) ────────────────────
+
+function inferContentType(url: string, body: string): string {
+  // ScraperAPI strips the upstream Content-Type. Recover the most common
+  // cases so callers using .json() don't break.
+  const trimmed = body.trimStart();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return 'application/json; charset=utf-8';
+  }
+  if (/\.json($|\?)/i.test(url)) {
+    return 'application/json; charset=utf-8';
+  }
+  return 'text/html; charset=utf-8';
 }
 
 /**
- * Get proxy exit IP for metadata
+ * Fetch a URL through ScraperAPI and return a real `Response` object so
+ * existing code that does `.text()`, `.json()`, `.status`, `.ok` keeps
+ * working without changes.
+ *
+ * Retry policy mirrors src/self-healing.ts:
+ *   • 401, 404 → terminal, no retry (auth/not-found are not transient)
+ *   • 403, 429 → immediate retry (ScraperAPI rotates IP automatically)
+ *   • other transient → linear backoff (500 ms × attempt)
  */
-export async function getProxyExitIp(): Promise<string> {
-  try {
-    const proxy = getProxy();
-    // Decrement index so we use the same proxy for the actual request
-    proxyIndex--;
-    const res = await fetch('https://api.ipify.org?format=json', {
-      // @ts-ignore
-      proxy: proxy.url,
-      signal: AbortSignal.timeout(10_000),
-    });
-    const data = await res.json() as any;
-    return data.ip || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-// ─── FETCH THROUGH PROXY ────────────────────────────
-
 export async function proxyFetch(
   url: string,
   options: ProxyFetchOptions = {},
 ): Promise<Response> {
-  const { maxRetries = 2, timeoutMs = 30_000, ...fetchOptions } = options;
+  const {
+    maxRetries = 2,
+    timeoutMs = 30_000,
+    render,
+    premium,
+    country,
+  } = options;
 
-  const defaultHeaders: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-  };
-
-  let lastError: Error | null = null;
-  const pool = initPool();
+  let lastErr: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const proxy = pool[proxyIndex % pool.length];
-    proxyIndex++;
-
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-      const response = await fetch(url, {
-        ...fetchOptions,
-        headers: { ...defaultHeaders, ...fetchOptions.headers as Record<string, string> },
-        signal: controller.signal,
-        // @ts-ignore — Bun supports proxy natively
-        proxy: proxy.url,
+      const html = await fetchHTML(url, {
+        render: render ?? true,
+        premium: premium ?? needsPremium(url),
+        country,
+        timeoutMs,
       });
+      return new Response(html, {
+        status: 200,
+        headers: { 'content-type': inferContentType(url, html) },
+      });
+    } catch (err) {
+      lastErr = err;
+      const status = err instanceof ScraperApiError ? err.status : 0;
 
-      clearTimeout(timeout);
-      return response;
-    } catch (err: any) {
-      lastError = err;
-      console.error(`[PROXY] Attempt ${attempt + 1} failed via ${proxy.host}:${proxy.port}: ${err.message}`);
-
-      // Remove dead proxy from pool (keep at least 1)
-      if (pool.length > 1 && (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT')) {
-        const idx = pool.indexOf(proxy);
-        if (idx !== -1) {
-          pool.splice(idx, 1);
-          console.warn(`[PROXY] Removed dead proxy ${proxy.host}:${proxy.port}, ${pool.length} remaining`);
-        }
+      // 403 against premium-only hosts is a plan-tier issue, not a transient
+      // bot-block — retrying just burns credits. Surface immediately.
+      if (status === 403 && PREMIUM_ONLY_HOSTS.test(url)) {
+        const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+        throw new PlanRestrictedError(host);
       }
 
+      // Terminal — don't retry
+      if (status === 401 || status === 404) break;
+
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
+        // 403/429 → immediate retry (ScraperAPI rotates IP server-side).
+        // Everything else → brief linear backoff.
+        const delayMs = status === 403 || status === 429 ? 0 : 500 * (attempt + 1);
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
       }
     }
   }
 
-  throw new Error(`Proxy fetch failed after ${maxRetries + 1} attempts: ${lastError?.message}`);
+  // Surface the failure as a Response (not a throw) so callers that do
+  // `if (!response.ok)` get a clean branch instead of an unhandled exception.
+  if (lastErr instanceof ScraperApiError) {
+    return new Response(lastErr.body || lastErr.message, {
+      status: lastErr.status,
+      statusText: lastErr.message.slice(0, 120),
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  }
+
+  // Non-ScraperAPI errors (network, timeout) — propagate.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`proxyFetch failed for ${url}: ${String(lastErr)}`);
 }

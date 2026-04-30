@@ -20,6 +20,7 @@
  */
 
 import { classifyFailure, type FailureKind } from './self-healing';
+import { PlanRestrictedError } from './proxy';
 
 export type BreakerState = 'closed' | 'open' | 'half_open';
 
@@ -134,6 +135,15 @@ export async function safeScrape<T>(name: string, fn: () => Promise<T>): Promise
     if (b.state !== 'closed') transition(b, name, 'closed', 'recovered');
     return value;
   } catch (err: any) {
+    // PlanRestrictedError is a terminal upstream-config issue (ScraperAPI
+    // plan tier doesn't allow this host). Don't count it against the
+    // breaker — that would needlessly quarantine the scraper after just
+    // a handful of calls when the right fix is to upgrade the upstream
+    // plan, not to back off and retry. Just rethrow so the global
+    // onError handler can surface a clean 503 with the actionable hint.
+    if (err instanceof PlanRestrictedError) {
+      throw err;
+    }
     const kind = classifyFailure(err);
     const msg = err?.message || String(err);
     b.totalFailures++;

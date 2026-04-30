@@ -13,7 +13,7 @@
  */
 
 import { Hono } from 'hono';
-import { proxyFetch, getProxy } from './proxy';
+import { proxyFetch, getProxy, PlanRestrictedError } from './proxy';
 import { extractPayment, verifyPayment, build402Response } from './payment';
 import { scrapeIndeed, scrapeLinkedIn, type JobListing } from './scrapers/job-scraper';
 import { fetchReviews, fetchBusinessDetails, fetchReviewSummary, searchBusinesses } from './scrapers/reviews';
@@ -341,7 +341,7 @@ serviceRouter.get('/run', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({
       error: 'Service execution failed',
       message: err.message,
@@ -411,7 +411,7 @@ serviceRouter.get('/details', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({
       error: 'Failed to fetch business details',
       message: err.message,
@@ -500,7 +500,7 @@ serviceRouter.get('/jobs', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Scrape failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -577,7 +577,7 @@ serviceRouter.get('/reviews/search', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -620,7 +620,7 @@ serviceRouter.get('/reviews/summary/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Summary fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -674,7 +674,7 @@ serviceRouter.get('/reviews/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Reviews fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -720,7 +720,7 @@ serviceRouter.get('/business/:place_id', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Business details fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -790,7 +790,7 @@ serviceRouter.get('/linkedin/person', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Profile fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -851,7 +851,7 @@ serviceRouter.get('/linkedin/company', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Company fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -910,7 +910,7 @@ serviceRouter.get('/linkedin/search/people', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -967,7 +967,7 @@ serviceRouter.get('/linkedin/company/:id/employees', async (c) => {
         settled: true,
       },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Employee search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1029,7 +1029,7 @@ serviceRouter.get('/reddit/search', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Reddit search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1072,7 +1072,7 @@ serviceRouter.get('/reddit/trending', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Reddit trending fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1127,7 +1127,7 @@ serviceRouter.get('/reddit/subreddit/:name', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Subreddit fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1181,7 +1181,7 @@ serviceRouter.get('/reddit/thread/*', async (c) => {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Comment fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1236,7 +1236,7 @@ serviceRouter.get('/instagram/profile/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Instagram profile fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1286,7 +1286,7 @@ serviceRouter.get('/instagram/posts/:username', async (c) => {
       meta: { username, count: posts.length, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Instagram posts fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1333,7 +1333,7 @@ serviceRouter.get('/instagram/analyze/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Instagram analysis failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1379,7 +1379,7 @@ serviceRouter.get('/instagram/analyze/:username/images', async (c) => {
       meta: { username, proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Instagram image analysis failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1425,7 +1425,7 @@ serviceRouter.get('/instagram/audit/:username', async (c) => {
       meta: { proxy: { country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Instagram audit failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1485,7 +1485,7 @@ serviceRouter.get('/airbnb/search', async (c) => {
       meta: { location, checkin, checkout, guests, count: results.length, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Airbnb search failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1525,7 +1525,7 @@ serviceRouter.get('/airbnb/listing/:id', async (c) => {
       meta: { proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Airbnb listing fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1570,7 +1570,7 @@ serviceRouter.get('/airbnb/reviews/:listing_id', async (c) => {
       meta: { listingId, count: reviews.length, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Airbnb reviews fetch failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1617,7 +1617,7 @@ serviceRouter.get('/airbnb/market-stats', async (c) => {
       meta: { location, proxy: { ip, country: proxy.country, type: 'mobile' } },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'Airbnb market stats failed', message: err?.message || String(err) }, 502);
   }
 });
@@ -1706,7 +1706,7 @@ async function handleSerp(c: any) {
       },
       payment: { txHash: payment.txHash, network: payment.network, amount: verification.amount, settled: true },
     });
-  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err;
+  } catch (err: any) { if (err instanceof ScraperUnavailableError) throw err; if (err instanceof PlanRestrictedError) throw err;
     return c.json({ error: 'SERP scrape failed', message: err?.message || String(err) }, 502);
   }
 }

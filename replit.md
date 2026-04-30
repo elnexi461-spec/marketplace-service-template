@@ -8,8 +8,18 @@ A Hono-based HTTP API server (running on Bun) that exposes scraping services gat
 - Framework: **Hono 4**
 - Language: TypeScript
 - Paywall: **`x402-hono` + `@coinbase/x402`** (Coinbase Managed Facilitator). `x402-express` is the Express equivalent — we use the Hono build because the app is Hono-based.
-- Browser automation: **`playwright-core`** (slim runtime) + `playwright-extra` + `puppeteer-extra-plugin-stealth`, launched with `--single-process` for 2 GB RAM devices.
+- Scraping backend: **ScraperAPI cloud** (`SCRAPER_API_KEY`). All HTTP fetches in scrapers go through `src/proxy.ts`, which forwards to `https://api.scraperapi.com` with `render=true` and `premium=auto`. No local browser, no local proxy fleet — 100% cloud-native.
 - No frontend — JSON HTTP API only.
+
+## ScraperAPI Capability Matrix
+ScraperAPI plans gate which sites can be unlocked. The hub knows this and degrades cleanly:
+- ✅ **Works on the current (basic) plan**: Amazon, eBay (intermittent), Reddit, Airbnb, Indeed, Google Search, DuckDuckGo, Google Maps, generic web.
+- ❌ **Plan-restricted (Business tier required)**: LinkedIn, Instagram. Requests to these hosts throw `PlanRestrictedError` from `src/proxy.ts`, which the global `onError` in `src/index.ts` converts into a clean **503** with the upgrade hint and the list of operational endpoints. The user's tx hash is **automatically released** (`releaseTxHash()` in `src/payment.ts`) so they can reuse the same payment on a working endpoint — no money burned on plan-restricted attempts.
+
+`PlanRestrictedError` is also bypassed by `safeScrape()` in `src/scraper-watchdog.ts` so a plan restriction never trips a circuit breaker.
+
+## Bun Server Tuning
+`src/index.ts` sets `idleTimeout: 120` on the default Bun.serve export. ScraperAPI rendered fetches for premium hosts can take 25-45 s, and many scrapers chain multiple fetches per request; the default 10 s would kill legitimate slow requests.
 
 ## x402 Paywall (Coinbase Managed Facilitator)
 Configured in `src/x402-config.ts`:

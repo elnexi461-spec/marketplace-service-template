@@ -1,4 +1,4 @@
-import { proxyFetch, getProxy } from '../proxy';
+import { proxyFetch, getProxy, PlanRestrictedError } from '../proxy';
 
 // LinkedIn Person Profile Interface
 export interface LinkedInPerson {
@@ -97,6 +97,7 @@ export async function fetchLinkedInPerson(url: string): Promise<LinkedInPerson |
     const html = await response.text();
     return parseLinkedInPerson(html, url);
   } catch (error: any) {
+    if (error instanceof PlanRestrictedError) throw error;
     console.error('Error fetching LinkedIn profile:', error.message);
     return null;
   }
@@ -186,6 +187,7 @@ export async function fetchLinkedInCompany(url: string): Promise<LinkedInCompany
     const html = await response.text();
     return parseLinkedInCompany(html, url);
   } catch (error: any) {
+    if (error instanceof PlanRestrictedError) throw error;
     console.error('Error fetching LinkedIn company:', error.message);
     return null;
   }
@@ -269,6 +271,7 @@ export async function searchLinkedInPeople(
     const html = await response.text();
     return parseSearchResults(html, limit);
   } catch (error: any) {
+    if (error instanceof PlanRestrictedError) throw error;
     console.error('Error searching LinkedIn:', error.message);
     return [];
   }
@@ -334,6 +337,7 @@ export async function searchCompanyEmployees(
     const html = await response.text();
     return parseSearchResults(html, limit);
   } catch (error: any) {
+    if (error instanceof PlanRestrictedError) throw error;
     console.error('Error searching employees:', error.message);
     return [];
   }
