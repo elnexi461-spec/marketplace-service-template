@@ -73,7 +73,7 @@ export function buildRoutes(): RoutesConfig {
       network: X402_NETWORK,
       config: {
         description:
-          'EL-BADOO Premium 4G Scraping Hub — high-trust, mobile-first scrape with self-healing 4G IP rotation.',
+          'EL-BADOO Cloud Scraping Hub — pay-per-call product page scraping. ScraperAPI residential rotation with JS rendering. Returns normalized JSON (product_name, current_price, currency, in_stock, timestamp).',
         mimeType: 'application/json',
         maxTimeoutSeconds: 60,
         outputSchema: {

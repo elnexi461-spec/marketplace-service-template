@@ -21,6 +21,14 @@ ScraperAPI plans gate which sites can be unlocked. The hub knows this and degrad
 ## Bun Server Tuning
 `src/index.ts` sets `idleTimeout: 120` on the default Bun.serve export. ScraperAPI rendered fetches for premium hosts can take 25-45 s, and many scrapers chain multiple fetches per request; the default 10 s would kill legitimate slow requests.
 
+## Discovery / Bazaar Listing
+- The Coinbase facilitator URL used by `@coinbase/x402`'s `createFacilitatorConfig` is hard-coded to `https://api.cdp.coinbase.com/platform/v2/x402` — verified directly in the SDK source. Nothing to configure here.
+- `src/discovery.ts` returns the truthful service descriptor: name "EL-BADOO Cloud Scraping Hub", ScraperAPI cloud backend, residential rotation, JS rendering, USDC on Base. **No 4G / Nigeria claims** — those were removed because the runtime no longer matches them.
+- Discovery is exposed two ways:
+  1. `/.well-known/x402` — the handler builds `baseUrl` from the incoming request `Host` header so deployed responses point at the deployed URL, not localhost.
+  2. The `POST /api/scrape` 402 response — `x402-hono` builds the `resource` URL from the incoming request, so the same self-derive happens automatically.
+- **Bazaar listing is NOT triggered by a single `/settle` call.** A `/settle` call requires a freshly-signed EIP-3009 `transferWithAuthorization` payload from an x402 client; you cannot "settle" an already-mined transaction by submitting its hash. Bazaar's `/list` endpoint surfaces servers whose resource URLs the indexer can reach with a clean 402 + discovery payload over time. Prerequisites: the deployment must be live at a public URL, and that URL must appear in the 402 `resource` field.
+
 ## x402 Paywall (Coinbase Managed Facilitator)
 Configured in `src/x402-config.ts`:
 - Reads `CDP_API_KEY_NAME`, `CDP_API_KEY_PRIVATE_KEY`, `USDC_RECEIVER_ADDRESS` from Replit Secrets.

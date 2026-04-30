@@ -40,9 +40,9 @@ export interface DeclareDiscoveryInput {
   extra?: Record<string, unknown>;
 }
 
-const DEFAULT_NAME = 'EL-BADOO Premium 4G Scraping Hub';
+const DEFAULT_NAME = 'EL-BADOO Cloud Scraping Hub';
 const DEFAULT_DESC =
-  'High-trust, mobile-first lead enrichment via authentic Nigerian 4G cluster. 30s IP rotation enabled.';
+  'Pay-per-call cloud scraping for product pages. Backed by ScraperAPI residential rotation with JS rendering. Returns normalized JSON: product_name, current_price, currency, in_stock, timestamp.';
 
 /**
  * Build the discovery extension descriptor.
@@ -72,17 +72,16 @@ export function declareDiscoveryExtension(
       'amazon',
       'ebay',
       'generic-product-page',
-      'mobile-4g-proxy',
+      'js-rendered-pages',
       'self-healing-circuit-breaker',
     ],
-    tags: ['scraping', 'mobile-proxy', 'x402', 'usdc', 'base', 'nigeria-4g'],
+    tags: ['scraping', 'cloud-proxy', 'x402', 'usdc', 'base', 'product-data'],
     extra: {
       operator: 'EL-BADOO',
-      proxyType: 'mobile-4g',
-      proxyRegion: 'NG',
-      ipRotationSeconds: 30,
+      backend: 'scraperapi-cloud',
+      rendering: 'javascript',
+      rotation: 'residential-pool',
       runtime: 'bun',
-      proxy: 'scraperapi-cloud (residential rotation, JS rendering)',
       maxRetries: 3,
       ...input.extra,
     },
